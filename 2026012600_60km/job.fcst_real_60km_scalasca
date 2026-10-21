@@ -1,0 +1,38 @@
+#! /bin/sh
+#SBATCH --account=fv3-cpu
+#SBATCH --qos=batch
+#SBATCH --nodes=30
+#SBATCH --ntasks=512
+#SBATCH --cpus-per-task=1
+#SBATCH -t 00:40:00
+#SBATCH --job-name=fcst_real
+#SBATCH -o out.fcst_real
+#SBATCH -e err.fcst_real
+
+MACHINE_ID=ursa
+source ./module-setup.sh
+module purge
+module use $PWD/modulefiles
+module load mpas/ursa
+module list
+
+export I_MPI_COLL_INTRANODE=shmem
+
+export I_MPI_PIN=1
+
+export OMP_STACKSIZE=2G
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+
+ulimit -s unlimited
+export SCOREP_PAGE_SIZE=64k
+export SCOREP_FILTERING_FILE=scorep.filt
+export SCOREP_TOTAL_MEMORY=4G
+
+rm -rf scorep_mpas_atmosphere_512_sum/
+
+unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+
+export SCOREP_TOTAL_MEMORY=4095M
+
+scalasca --analyze srun -n 512 /scratch3/NCEPDEV/global/${USER}/MPAS/MPAS-Model/build/bin/mpas_atmosphere
