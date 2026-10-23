@@ -4,14 +4,10 @@
 #SBATCH --nodes=30
 #SBATCH --ntasks=512
 #SBATCH --cpus-per-task=1
-###SBATCH ----tasks-per-cpu=2
-##SBATCH --tasks-per-node=52
-###SBATCH -t 06:00:00
 #SBATCH -t 00:40:00
-###SBATCH -t 00:30:00
-#SBATCH --job-name=fcst_real
-#SBATCH -o out.fcst_real
-#SBATCH -e err.fcst_real
+#SBATCH --job-name=fcst_norm
+#SBATCH -o out.fcst_norm
+#SBATCH -e err.fcst_norm
 
 MACHINE_ID=ursa
 source ./module-setup.sh
