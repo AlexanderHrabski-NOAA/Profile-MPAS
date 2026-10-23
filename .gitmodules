@@ -1,0 +1,3 @@
+[submodule "MPAS-Model"]
+	path = MPAS-Model
+	url = ./MPAS-Model/
