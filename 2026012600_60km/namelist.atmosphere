@@ -1,10 +1,10 @@
 &nhyd_model
     config_time_integration_order = 2
-    config_dt = 360.0
-    config_start_time = '2026-01-26_00:00:00'
-    config_run_duration = '1_00:00:00'
+    config_dt = 300.0
+    config_start_time = '2026-1-26_00:00:00'
+    config_run_duration = '7_00:00:00'
     config_split_dynamics_transport = .true.
-    config_number_of_sub_steps = 6
+    config_number_of_sub_steps = 4
     config_dynamics_split_steps = 3
     config_horiz_mixing = '2d_smagorinsky'
     config_visc4_2dsmag = 0.05
@@ -16,11 +16,13 @@
 /
 
 &damping
-    config_zd = 40000.0
+    config_zd = 45000.0
     config_xnutr = 0.2
-    config_mpas_cam_coef = 1.0
-    config_rayleigh_damp_u = .true.
-    config_number_cam_damping_levels = 8
+    config_xnutr = 0.2
+    config_epssm_minimum = 0.1
+    config_epssm_maximum = 0.5
+    config_epssm_transition_bottom_z = 30000.
+    config_epssm_transition_top_z = 70000.
 /
 
 &limited_area
