@@ -1,0 +1,24 @@
+SCOREP_REGION_NAMES_BEGIN
+  EXCLUDE
+    # High-frequency kissvec routines (approx 193 billion visits)
+    mcica_subcol_gen_lw_mp_kissvec_
+    mcica_subcol_gen_sw_mp_kissvec_
+    
+    # High-frequency diagnostic and utility functions
+    mpas_pv_diagnostics_mp_calc_horizderiv_fv_
+    mpas_c_interfacing_mp_mpas_f_to_c_string_
+    mpas_sort_mp_mpas_binary_search_
+    mpas_threading_mp_mpas_threading_get_thread_num_
+    
+    # Wildcards for high-frequency getter/helper patterns
+    mpas_pool_routines_mp_*
+    esmf_basetimemod_mp_*
+    esmf_timemod_mp_*
+    esmf_calendarmod_mp_*
+    
+    # Frequent math/utility helpers
+    module_sf_noahlsm_mp_rslf_
+    module_sf_noahlsm_mp_rsif_
+    module_libmassv_mp_vrec_s_
+    module_libmassv_mp_vsqrt_s_
+SCOREP_REGION_NAMES_END
