@@ -1,0 +1,37 @@
+help([[
+This module loads libraries for MPAS-Model
+]])
+
+--whatis([===[Loads libraries for MPAS-Model ]===])
+prepend_path("MODULEPATH", "/contrib/spack-stack/spack-stack-2.0.0/envs/scalasca-oneapi-2025.2.1/modules/Core")
+
+load("stack-intel-oneapi-compilers/2025.2.1")
+load("stack-intel-oneapi-mpi/2021.13")
+
+load("cmake/3.31.8")
+load("parallel-netcdf/1.12.3")
+load("parallelio/2.6.2")
+
+setenv("CMAKE_C_COMPILER", "mpiicx")
+setenv("CMAKE_CXX_COMPILER", "mpiicpx")
+setenv("CMAKE_Fortran_COMPILER", "mpiifx")
+
+
+setenv("CC", "mpiicx")
+setenv("CXX", "mpiicpx")
+setenv("FC", "mpiifx")
+setenv("I_MPI_CC", "icx")
+setenv("I_MPI_CXX", "icpx")
+setenv("I_MPI_FC", "ifx")
+
+
+scalasca_ver=os.getenv("scalasca_ver") or "2.6.1"
+load(pathJoin("scalasca", scalasca_ver))
+
+if mode() == "load" then
+  setenv("PNETCDF", os.getenv("PARALLEL_NETCDF_ROOT"))
+  --setenv("PNETCDF", os.getenv("parallel_netcdf_ROOT"))
+end
+if mode() == "unload" then
+  unsetenv("PNETCDF")
+end
