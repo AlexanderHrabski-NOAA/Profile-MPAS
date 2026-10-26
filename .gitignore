@@ -2,3 +2,5 @@
 fix
 partition
 ic
+utils/GKlib
+utils/METIS
