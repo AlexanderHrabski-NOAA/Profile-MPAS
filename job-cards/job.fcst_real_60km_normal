@@ -1,10 +1,11 @@
 #! /bin/sh
 #SBATCH --account=fv3-cpu
 #SBATCH --qos=batch
-#SBATCH --nodes=30
-#SBATCH --ntasks=512
+#SBATCH --nodes=8
+#SBATCH --tasks-per-node=96
 #SBATCH --cpus-per-task=1
-#SBATCH -t 00:40:00
+#SBATCH -t 00:30:00
+#SBATCH --exclusive
 #SBATCH --job-name=fcst_norm
 #SBATCH -o out.fcst_norm
 #SBATCH -e err.fcst_norm
@@ -13,15 +14,14 @@ MACHINE_ID=ursa
 source ./module-setup.sh
 module purge
 module use $PWD/modulefiles
-#module load ursa.intel
 module load mpas/ursa
 module list
 
-export I_MPI_COLL_INTRANODE=pt2pt
+export I_MPI_COLL_INTRANODE=shmem
+export I_MPI_PIN=1
 
-#srun -n 2000 /scratch1/NCEPDEV/fv3-cam/Jili.Dong/mpas_git/MPAS-Model/atmosphere_model
-#srun -n 512 /scratch3/NCEPDEV/fv3-cam/Jili.Dong/mpas_util/MPAS-Model-20260311-3a22/MPAS-Model/build/bin/mpas_atmosphere
-#srun -n 512 /scratch3/NCEPDEV/stmp/Helin.Wei/gfs/forecast_mpas/2026012600_60km/MPAS-Model/build/bin/mpas_atmosphere
-#srun -n 512 /scratch3/NCEPDEV/stmp/Helin.Wei/gfs/forecast_mpas/2026012600_60km/MPAS-Model/build/bin/mpas_atmosphere
-#srun -n 512 /scratch3/NCEPDEV/stmp/Helin.Wei/gfs/forecast_mpas/2026012600_60km/bug_fix/MPAS-Model/build/bin/mpas_atmosphere
-srun -n 512 /scratch3/NCEPDEV/global/${USER}/MPAS/MPAS-Model/build/bin/mpas_atmosphere
+export OMP_STACKSIZE=2G
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+
+srun -N 8 --tasks-per-node=96 --cpus-per-task=1 /scratch3/NCEPDEV/global/${USER}/MPAS/MPAS-Model/build/bin/mpas_atmosphere
