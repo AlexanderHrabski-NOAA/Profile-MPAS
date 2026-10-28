@@ -1,10 +1,10 @@
 #! /bin/sh
 #SBATCH --account=fv3-cpu
 #SBATCH --qos=batch
-#SBATCH --nodes=8
+#SBATCH --nodes=4
 #SBATCH --tasks-per-node=96
 #SBATCH --cpus-per-task=1
-#SBATCH -t 00:30:00
+#SBATCH -t 00:40:00
 #SBATCH --exclusive
 #SBATCH --job-name=fcst_norm
 #SBATCH -o out.fcst_norm
@@ -24,4 +24,4 @@ export OMP_STACKSIZE=2G
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 
-srun -N 8 --tasks-per-node=96 --cpus-per-task=1 /scratch3/NCEPDEV/global/${USER}/MPAS/MPAS-Model/build/bin/mpas_atmosphere
+srun -N 4 --tasks-per-node=96 --cpus-per-task=1 /scratch3/NCEPDEV/global/${USER}/MPAS/MPAS-Model/build/bin/mpas_atmosphere
