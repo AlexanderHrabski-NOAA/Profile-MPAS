@@ -1,7 +1,7 @@
 <streams>
 <immutable_stream name="input"
                   type="input"
-                  filename_template="global.60km.init.nc"
+                  filename_template="{{ stem }}.init.nc"
                   input_interval="initial_only" />
 
 <immutable_stream name="restart"
@@ -31,7 +31,7 @@
 
 <stream name="surface"
         type="input"
-        filename_template="x1.40962.sfc_update.nc"
+        filename_template="{{ mesh }}.sfc_update.nc"
         filename_interval="none"
         input_interval="none" >
 
@@ -40,7 +40,7 @@
 
 <immutable_stream name="iau"
                   type="input"
-                  filename_template="x1.40962.AmB.$Y-$M-$D_$h.$m.$s.nc"
+                  filename_template="{{ mesh }}.AmB.$Y-$M-$D_$h.$m.$s.nc"
                   filename_interval="none"
                   packages="iau"
                   input_interval="initial_only" />
@@ -54,7 +54,7 @@
 
 <immutable_stream name="ugwp_oro_data_in"
                   type="input"
-                  filename_template="global.60km.ugwp_oro_data.nc"
+                  filename_template="{{ stem }}.ugwp_oro_data.nc"
                   input_interval="initial_only"
                   packages="ugwp_orog_stream" />
 

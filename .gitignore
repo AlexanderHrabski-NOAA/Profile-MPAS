@@ -4,3 +4,6 @@ partition
 ic
 utils/GKlib
 utils/METIS
+runs
+__pycache__
+.pytest_cache

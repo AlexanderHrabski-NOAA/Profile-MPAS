@@ -1,0 +1,41 @@
+#! /bin/sh
+#SBATCH --account={{ account }}
+#SBATCH --qos={{ qos }}
+#SBATCH --nodes={{ nodes }}
+{% if tasks_per_node %}
+#SBATCH --tasks-per-node={{ tasks_per_node }}
+{% else %}
+#SBATCH --ntasks={{ ntasks }}
+{% endif %}
+#SBATCH --cpus-per-task={{ cpus_per_task }}
+#SBATCH -t {{ walltime }}
+#SBATCH --exclusive
+#SBATCH --job-name={{ name }}
+#SBATCH -o out.fcst_{{ tag }}
+#SBATCH -e err.fcst_{{ tag }}
+
+MACHINE_ID=ursa
+source ./module-setup.sh
+module purge
+module use $PWD/modulefiles
+module load mpas/ursa
+module list
+
+export I_MPI_COLL_INTRANODE=shmem
+export I_MPI_PIN=1
+
+export OMP_STACKSIZE=2G
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+{% if profile %}
+
+ulimit -s unlimited
+export SCOREP_PAGE_SIZE=64k
+export SCOREP_FILTERING_FILE=scorep.filt
+
+unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+
+export SCOREP_TOTAL_MEMORY=4095M
+{% endif %}
+
+{% if profile %}scalasca --analyze {% endif %}srun -N {{ nodes }} {% if tasks_per_node %}--tasks-per-node={{ tasks_per_node }}{% else %}-n {{ ntasks }}{% endif %} --cpus-per-task={{ cpus_per_task }} {{ mpas_bin }}

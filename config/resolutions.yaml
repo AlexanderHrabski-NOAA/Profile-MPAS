@@ -1,0 +1,11 @@
+# Resolutions a study can select with `resolution: <key>`.
+#
+# stem  prefix of the grid-specific files (<stem>.init.nc, <stem>.graph.info, ...)
+# mesh  mesh id used in the surface-update and IAU file names
+# dt    config_dt for the namelist, in seconds
+#
+# Data for a resolution lives in ic/<key>/, fix/<key>/ and partition/<key>/.
+60km:
+  stem: global.60km
+  mesh: x1.40962
+  dt: 300.0

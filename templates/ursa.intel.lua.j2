@@ -1,3 +1,4 @@
+{% set wrap = "scorep-" if profile else "" %}
 help([[
 This module loads libraries for MPAS-Model
 ]])
@@ -12,17 +13,17 @@ load("cmake/3.31.8")
 load("parallel-netcdf/1.12.3")
 load("parallelio/2.6.2")
 
-setenv("CMAKE_C_COMPILER", "mpiicx")
-setenv("CMAKE_CXX_COMPILER", "mpiicpx")
-setenv("CMAKE_Fortran_COMPILER", "mpiifx")
+setenv("CMAKE_C_COMPILER", "{{ wrap }}mpiicx")
+setenv("CMAKE_CXX_COMPILER", "{{ wrap }}mpiicpx")
+setenv("CMAKE_Fortran_COMPILER", "{{ wrap }}mpiifx")
 
 
-setenv("CC", "mpiicx")
-setenv("CXX", "mpiicpx")
-setenv("FC", "mpiifx")
-setenv("I_MPI_CC", "icx")
-setenv("I_MPI_CXX", "icpx")
-setenv("I_MPI_FC", "ifx")
+setenv("CC", "{{ wrap }}mpiicx")
+setenv("CXX", "{{ wrap }}mpiicpx")
+setenv("FC", "{{ wrap }}mpiifx")
+setenv("I_MPI_CC", "{{ wrap }}icx")
+setenv("I_MPI_CXX", "{{ wrap }}icpx")
+setenv("I_MPI_FC", "{{ wrap }}ifx")
 
 
 scalasca_ver=os.getenv("scalasca_ver") or "2.6.1"

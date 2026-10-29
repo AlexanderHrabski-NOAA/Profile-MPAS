@@ -1,0 +1,15 @@
+# Strong scaling of the 60 km case, 1 to 16 nodes, with Scalasca profiling.
+# Run with:  ./build-and-run.py studies/strong-scaling-60km.yaml
+study: strong-scaling-60km
+
+defaults:
+  resolution: 60km
+  tasks_per_node: 96
+  profile: true
+  walltime: "00:40:00"
+  mpas:
+    ref: MPAS-v8.4.2-1.19   # branch, tag, or hash; omit to use the submodule pin
+
+experiments:
+  - sweep:
+      nodes: [1, 2, 4, 8, 16]
