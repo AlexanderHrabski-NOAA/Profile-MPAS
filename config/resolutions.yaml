@@ -9,3 +9,8 @@
   stem: global.60km
   mesh: x1.40962
   dt: 300.0
+
+10km:
+  stem: global.10km
+  mesh: x1.5898242
+  dt: 50.0

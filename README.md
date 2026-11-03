@@ -33,7 +33,7 @@ MPAS lives in the `MPAS-Model` submodule. Initialize it with:
 git submodule update --init
 ```
 
-The commit the submodule is pinned to is what a study builds unless you ask for something else. Note that the build step works on a clone of this directory, never on the submodule itself, so you can leave it alone. If the submodule can't be cloned, or you would like to build from a different repository, you can point a study at any MPAS clone with `mpas: {repo: /path/to/MPAS-Model}` (see below).
+Only the top-level submodule is needed here; the driver initializes MPAS's own nested submodules in each build clone. The commit the submodule is pinned to is what a study builds unless you ask for something else. Note that the build step works on a clone of this directory, never on the submodule itself, so you can leave it alone. If the submodule can't be cloned, or you would like to build from a different repository, you can point a study at any MPAS clone with `mpas: {repo: /path/to/MPAS-Model}` (see below).
 
 ### METIS
 
@@ -153,7 +153,7 @@ The tool prints one row per experiment, how many builds it needs, and which part
 The steps, in order:
 
 1. **Validate.** Check the YAML, the resolutions, the data directories, and resolve each `mpas.ref` to a full commit hash. If a ref isn't in the source repository yet, the driver runs `git fetch` there and tries again.
-2. **Build.** MPAS is cloned from the source repository and checked out at the resolved commit, then built with `build.sh`. There is one build per unique *(commit, profile)* pair, shared by every experiment that needs it, so a five-point scaling study builds once, and the same binary runs at every scale. A finished build is marked with a `.build-ok` file and reused on later runs.
+2. **Build.** MPAS is cloned from the source repository and checked out at the resolved commit. Its nested submodules (the physics packages, such as MMM-physics, TEMPO, and UGWP) are then initialized at the commits MPAS pins, which needs network access to GitHub, and the model is built with `build.sh`. There is one build per unique *(commit, profile)* pair, shared by every experiment that needs it, so a five-point scaling study builds once, and the same binary runs at every scale. A finished build is marked with a `.build-ok` file and reused on later runs.
 3. **Partition.** For each rank count that doesn't have a `partition/<res>/<stem>.graph.info.part.<nranks>` file, the driver runs `gpmetis -minconn -contig -niter=200 <stem>.graph.info <nranks>`. A single-rank run needs no partition file and MPAS doesn't read one.
 4. **Stage.** Each experiment directory is written and then submitted with `sbatch`.
 

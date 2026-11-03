@@ -23,9 +23,12 @@ cd "$1"
 
 
 def git(*args, cwd=REPO, check=True):
-    return subprocess.run(["git", *args], cwd=str(cwd), check=check,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True)
+    r = subprocess.run(["git", *args], cwd=str(cwd),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True)
+    if check and r.returncode:
+        raise SetupError(f"git {' '.join(args)} failed in {cwd}:\n{r.stderr.strip()}")
+    return r
 
 
 def pinned_commit():
@@ -91,6 +94,10 @@ def ensure_build(bdir, source, sha, profile, rebuild=False):
     bdir.parent.mkdir(parents=True, exist_ok=True)
     git("clone", "--quiet", "--no-checkout", str(source), str(bdir))
     git("checkout", "--quiet", sha, cwd=bdir)
+    # MPAS keeps its physics packages in nested submodules. A plain clone leaves
+    # them as empty directories, which CMake takes as already checked out.
+    print("  Initializing MPAS submodules")
+    git("submodule", "update", "--init", "--recursive", "--quiet", cwd=bdir)
 
     # build.sh reads the modulefile in the clone, so the rendered one goes there.
     mod = bdir / "modulefiles" / "mpas" / "ursa.intel.lua"

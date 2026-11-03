@@ -44,12 +44,21 @@ def world(tmp_path):
         #!/bin/bash
         echo "build.sh MODLOADED=$MODLOADED in $PWD" >> "$STUB_LOG"
         test -f modulefiles/mpas/ursa.intel.lua || exit 9
+        test -f ext/physics.F90 || { echo "nested submodule missing" >> "$STUB_LOG"; exit 8; }
         [ -n "$FAIL_BUILD" ] && exit 3
         mkdir -p build/bin && echo bin > build/bin/mpas_atmosphere
         """))
     (mpas / "build.sh").chmod(0o755)
     run = lambda *a, cwd=mpas: subprocess.run(a, cwd=cwd, check=True, capture_output=True)
+    # a nested submodule, as MPAS has for its physics packages
+    ext = tmp_path / "ext-src"
+    ext.mkdir()
+    (ext / "physics.F90").write_text("! physics\n")
+    run("git", "init", "-q", "-b", "main", cwd=ext)
+    run("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=ext)
+    run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ext", cwd=ext)
     run("git", "init", "-q", "-b", "main")
+    run("git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(ext), "ext")
     run("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
     run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one")
     run("git", "tag", "v1")
@@ -63,7 +72,10 @@ def world(tmp_path):
         (bindir / name).chmod(0o755)
     log = tmp_path / "stub.log"
     log.write_text("")
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", STUB_LOG=str(log))
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", STUB_LOG=str(log),
+               # recent git refuses file:// submodule transport by default
+               GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow",
+               GIT_CONFIG_VALUE_0="always")
     env["BASH_FUNC_module%%"] = MODULE_FN
 
     def go(study, *flags, env_extra=None):

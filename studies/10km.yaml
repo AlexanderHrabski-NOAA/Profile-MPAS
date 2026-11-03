@@ -1,0 +1,15 @@
+# Single 10 km run on 64 nodes (6144 ranks), with Scalasca profiling.
+# Run with:  ./build-and-run.py studies/10km.yaml
+study: 10km
+
+defaults:
+  resolution: 10km
+  tasks_per_node: 96
+  profile: true
+  walltime: "02:00:00"
+  run_duration: "1_00:00:00"
+  mpas:
+    ref: MPAS-v8.4.2-1.19   # branch, tag, or hash; omit to use the submodule pin
+
+experiments:
+  - nodes: 64
