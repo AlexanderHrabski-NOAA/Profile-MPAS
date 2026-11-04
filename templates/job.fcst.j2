@@ -18,7 +18,7 @@ MACHINE_ID=ursa
 source ./module-setup.sh
 module purge
 module use $PWD/modulefiles
-module load mpas/ursa
+module load mpas/ursa.intel
 module list
 
 export I_MPI_COLL_INTRANODE=shmem

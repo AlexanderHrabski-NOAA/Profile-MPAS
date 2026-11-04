@@ -182,7 +182,7 @@ runs/strong-scaling-60km/
     streams.atmosphere
     stream_list.*               copied from config/mpas
     scorep.filt                 copied from config/scalasca (profiled runs only)
-    modulefiles/ursa.intel.lua
+    modulefiles/mpas/ursa.intel.lua
     module-setup.sh
     global.60km.init.nc  ...    symlinks to ic/ and fix/
     global.60km.graph.info.part.384   symlink to the partition

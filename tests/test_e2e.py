@@ -109,7 +109,7 @@ def test_sweep_end_to_end(world):
     assert (e / "global.60km.graph.info.part.384").is_symlink()
     assert (e / "global.60km.init.nc").is_symlink()
     assert (e / "scorep.filt").exists() and (e / "stream_list.atmosphere.output").exists()
-    assert (e / "modulefiles/ursa.intel.lua").exists()
+    assert (e / "modulefiles/mpas/ursa.intel.lua").exists()
     job = (e / "job.fcst").read_text()
     build_dir = next((world.root / "runs/t/builds").iterdir())
     assert str(build_dir / "build/bin/mpas_atmosphere") in job
@@ -166,7 +166,7 @@ def test_noprofile_and_bad_ref(world):
     assert r.returncode == 0, r.stderr
     e = world.root / "runs/t/experiments/60km_v1_norm_n2x96"
     assert not (e / "scorep.filt").exists()
-    assert "scorep" not in (e / "modulefiles/ursa.intel.lua").read_text()
+    assert "scorep" not in (e / "modulefiles/mpas/ursa.intel.lua").read_text()
     s = study(world.mpas)
     s["defaults"]["mpas"]["ref"] = "nope"
     r = world.go(s, "--dry-run")

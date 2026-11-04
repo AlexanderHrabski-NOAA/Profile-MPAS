@@ -43,8 +43,8 @@ def stage(exp, res, edir, bdir, mpas_info, gpmetis_cmd):
     (edir / "namelist.atmosphere").write_text(render.namelist(exp, res))
     (edir / "streams.atmosphere").write_text(render.streams(res))
     (edir / "job.fcst").write_text(render.job(exp, build.mpas_bin(bdir)))
-    (edir / "modulefiles").mkdir()
-    (edir / "modulefiles" / "ursa.intel.lua").write_text(mod_text)
+    (edir / "modulefiles" / "mpas").mkdir(parents=True)
+    (edir / "modulefiles" / "mpas" / "ursa.intel.lua").write_text(mod_text)
 
     # Small config files are copied so the experiment can't drift if the repo changes.
     for f in sorted((REPO / "config" / "mpas").glob("stream_list.*")):
