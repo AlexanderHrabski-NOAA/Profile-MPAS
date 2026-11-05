@@ -71,6 +71,45 @@ def test_sweep_is_cartesian(tmp_path):
     assert len(s.experiments) == 4
 
 
+def zip_study(entry):
+    return {"study": "t", "defaults": {"resolution": "60km"}, "experiments": [entry]}
+
+
+def test_zip_is_pairwise(tmp_path):
+    s = load(tmp_path, zip_study({"zip": {"nodes": [1, 2, 4], "tasks_per_node": [96, 48, 24]}}))
+    assert [(e.nodes, e.tasks_per_node) for e in s.experiments] == [(1, 96), (2, 48), (4, 24)]
+
+
+def test_zip_crossed_with_sweep(tmp_path):
+    s = load(tmp_path, zip_study({
+        "sweep": {"output": [True, False]},
+        "zip": {"nodes": [1, 2, 4], "pio.iotasks_per_node": [1, 2, 4]},
+        "tasks_per_node": 96}))
+    assert len(s.experiments) == 6
+    assert len({e.name for e in s.experiments}) == 6
+    assert {(e.nodes, e.pio_iotasks_per_node) for e in s.experiments} == {(1, 1), (2, 2), (4, 4)}
+    assert sum(not e.output for e in s.experiments) == 3
+
+
+def test_zip_dotted_key(tmp_path):
+    s = load(tmp_path, zip_study({"nodes": 1, "tasks_per_node": 96,
+                                  "zip": {"mpas.ref": ["a", "b"], "output": [True, False]}}))
+    assert [(e.mpas_ref, e.output) for e in s.experiments] == [("a", True), ("b", False)]
+
+
+@pytest.mark.parametrize("entry, msg", [
+    ({"zip": {"nodes": [1, 2], "tasks_per_node": [96]}}, "same length: 'nodes' has 2, 'tasks_per_node' has 1"),
+    ({"zip": {"nodes": []}}, "zip 'nodes' must be a non-empty list"),
+    ({"zip": {"nodes": 2}}, "zip 'nodes' must be a non-empty list"),
+    ({"zip": [1, 2]}, "'zip' must be a mapping"),
+    ({"zip": {}}, "'zip' must be a mapping"),
+    ({"sweep": {"nodes": [1, 2]}, "zip": {"nodes": [1, 2]}}, "both 'sweep' and 'zip': nodes"),
+])
+def test_zip_errors(tmp_path, entry, msg):
+    with pytest.raises(SetupError, match=msg):
+        load(tmp_path, zip_study({"tasks_per_node": 96, **entry}))
+
+
 @pytest.mark.parametrize("entry, msg", [
     ({"nodes": 1}, "exactly one"),
     ({"nodes": 1, "tasks_per_node": 2, "ntasks": 2}, "exactly one"),

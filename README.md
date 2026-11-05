@@ -101,6 +101,17 @@ experiments:
 
 Sweep keys can reach into `mpas` with a dotted name, which is how you compare MPAS versions: `sweep: {mpas.ref: [MPAS-v8.4.2-1.19, develop], nodes: [4, 8]}`.
 
+To vary parameters together instead of crossing them, use `zip`. Its lists are matched by position, so they must all be the same length, and each key can appear in only one of `sweep` and `zip`:
+
+```yaml
+experiments:
+  - zip:
+      nodes: [1, 2, 4]
+      pio.iotasks_per_node: [1, 2, 4]   # 3 experiments: (1, 1), (2, 2), (4, 4)
+```
+
+An entry can have both. The zipped pairs are then crossed with the `sweep`, so adding `sweep: {output: [true, false]}` to the entry above makes 2 x 3 = 6 experiments. Dotted keys work in `zip` just as they do in `sweep`.
+
 ### Keys
 
 | Key | Default | Meaning |

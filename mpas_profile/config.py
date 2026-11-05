@@ -95,24 +95,50 @@ def set_path(d, dotted, value):
     d[leaf] = value
 
 
+def _axes(value, label):
+    """Validate a `sweep`/`zip` mapping of key -> non-empty list of values."""
+    if not isinstance(value, dict) or not value:
+        raise SetupError(f"'{label}' must be a mapping of key -> list of values.")
+    for k, v in value.items():
+        if not isinstance(v, list) or not v:
+            raise SetupError(f"{label} '{k}' must be a non-empty list.")
+    return value
+
+
 def expand_entry(entry):
-    """Expand one `experiments:` entry. A `sweep` is a cartesian product."""
+    """Expand one `experiments:` entry.
+
+    A `sweep` is a cartesian product of its lists. A `zip` pairs its lists by
+    position (all must be the same length). With both, each zipped tuple is
+    crossed with the sweep product.
+    """
     entry = copy.deepcopy(entry)
     sweep = entry.pop("sweep", None)
-    if sweep is None:
+    zipped = entry.pop("zip", None)
+    if sweep is None and zipped is None:
         return [entry]
-    if not isinstance(sweep, dict) or not sweep:
-        raise SetupError("'sweep' must be a mapping of key -> list of values.")
-    for k, v in sweep.items():
-        if not isinstance(v, list) or not v:
-            raise SetupError(f"sweep '{k}' must be a non-empty list.")
-    keys = list(sweep)
+    sweep = _axes(sweep, "sweep") if sweep is not None else {}
+    zipped = _axes(zipped, "zip") if zipped is not None else {}
+
+    lengths = {k: len(v) for k, v in zipped.items()}
+    if len(set(lengths.values())) > 1:
+        detail = ", ".join(f"'{k}' has {n}" for k, n in lengths.items())
+        raise SetupError(f"zip lists must all be the same length: {detail}.")
+    both = sorted(set(sweep) & set(zipped))
+    if both:
+        raise SetupError(f"key(s) in both 'sweep' and 'zip': {', '.join(both)}.")
+
+    sweep_keys, zip_keys = list(sweep), list(zipped)
+    n_zip = next(iter(lengths.values()), 1)  # one pass with no keys when there is no zip
     out = []
-    for combo in itertools.product(*(sweep[k] for k in keys)):
-        e = copy.deepcopy(entry)
-        for k, v in zip(keys, combo):
-            set_path(e, k, v)
-        out.append(e)
+    for combo in itertools.product(*(sweep[k] for k in sweep_keys)):
+        for i in range(n_zip):
+            e = copy.deepcopy(entry)
+            for k, v in zip(sweep_keys, combo):
+                set_path(e, k, v)
+            for k in zip_keys:
+                set_path(e, k, zipped[k][i])
+            out.append(e)
     return out
 
 
