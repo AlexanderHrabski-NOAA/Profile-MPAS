@@ -33,6 +33,32 @@ def test_namelist_and_streams():
     nl = render.namelist(exp(start_time="2026-2-1_00:00:00"), res)
     assert "config_start_time = '2026-2-1_00:00:00'" in nl
     assert "config_block_decomp_file_prefix = 'global.60km.graph.info.part.'" in nl
-    st = render.streams(res)
+    st = render.streams(exp(), res)
     assert 'filename_template="global.60km.init.nc"' in st
     assert "x1.40962.sfc_update.nc" in st
+
+
+def test_io_defaults_unchanged():
+    res = config.load_resolutions()["60km"]
+    e = exp()
+    nl, st = render.namelist(e, res), render.streams(e, res)
+    assert "config_pio_num_iotasks = 0\n    config_pio_stride = 1\n" in nl
+    assert 'output_interval="1_00:00:00" />' in st
+    assert st.count('output_interval="3:00:00" >') == 2
+    assert "io_type" not in st and 'output_interval="none"' not in st
+
+
+def test_output_off():
+    res = config.load_resolutions()["60km"]
+    st = render.streams(exp(output=False), res)
+    assert st.count('output_interval="none"') == 3
+    assert 'output_interval="1_00:00:00"' not in st and 'output_interval="3:00:00"' not in st
+    assert 'input_interval="3:00:00"' in st         # inputs untouched (lbc_in)
+
+
+def test_pio_namelist_and_io_type():
+    res = config.load_resolutions()["60km"]
+    e = exp(pio={"num_iotasks": 8, "stride": 48, "io_type": "pnetcdf,cdf5"})
+    assert "config_pio_num_iotasks = 8\n    config_pio_stride = 48\n" in render.namelist(e, res)
+    st = render.streams(e, res)
+    assert st.count('io_type="pnetcdf,cdf5"') == 3   # restart, output, diagnostics only

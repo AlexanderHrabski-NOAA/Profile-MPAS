@@ -41,7 +41,7 @@ def stage(exp, res, edir, bdir, mpas_info, gpmetis_cmd):
     mod_text = render.modulefile(exp.profile)
 
     (edir / "namelist.atmosphere").write_text(render.namelist(exp, res))
-    (edir / "streams.atmosphere").write_text(render.streams(res))
+    (edir / "streams.atmosphere").write_text(render.streams(exp, res))
     (edir / "job.fcst").write_text(render.job(exp, build.mpas_bin(bdir)))
     (edir / "modulefiles" / "mpas").mkdir(parents=True)
     (edir / "modulefiles" / "mpas" / "ursa.intel.lua").write_text(mod_text)

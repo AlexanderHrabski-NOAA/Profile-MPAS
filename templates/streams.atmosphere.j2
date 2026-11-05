@@ -9,13 +9,13 @@
                   filename_template="restart.$Y-$M-$D_$h.$m.$s.nc"
                   clobber_mode = "replace_files"
                   input_interval="initial_only"
-                  output_interval="1_00:00:00" />
+                  output_interval="{{ '1_00:00:00' if output else 'none' }}"{{ ('\n                  io_type="' ~ io_type ~ '"') if io_type else '' }} />
 
 <stream name="output"
         type="output"
         filename_template="history.$Y-$M-$D_$h.$m.$s.nc"
         clobber_mode = "replace_files"
-        output_interval="3:00:00" >
+        output_interval="{{ '3:00:00' if output else 'none' }}"{{ ('\n        io_type="' ~ io_type ~ '"') if io_type else '' }} >
 
 	<file name="stream_list.atmosphere.output"/>
 </stream>
@@ -24,7 +24,7 @@
         type="output"
         filename_template="diag.$Y-$M-$D_$h.$m.$s.nc"
         clobber_mode = "replace_files"
-        output_interval="3:00:00" >
+        output_interval="{{ '3:00:00' if output else 'none' }}"{{ ('\n        io_type="' ~ io_type ~ '"') if io_type else '' }} >
 
 	<file name="stream_list.atmosphere.diagnostics"/>
 </stream>

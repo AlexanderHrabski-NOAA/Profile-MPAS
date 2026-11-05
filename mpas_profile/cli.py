@@ -66,8 +66,10 @@ def run(argv):
 
     print("\nExperiments:")
     table([[e.name, e.resolution, e.nodes, e.ntasks, e.tasks_per_node or "-",
-            sources[e.name][1][:12], e.tag] for e in study.experiments],
-          ["name", "res", "nodes", "ranks", "tpn", "mpas", "profile"])
+            sources[e.name][1][:12], e.tag, "on" if e.output else "off",
+            f"{e.pio_num_iotasks}/{e.pio_stride}" if e.pio_num_iotasks else "all"]
+           for e in study.experiments],
+          ["name", "res", "nodes", "ranks", "tpn", "mpas", "profile", "output", "pio"])
     print(f"\nBuilds: {len(builds)}")
     for (sha, profile), (source, bdir) in builds.items():
         state = "reuse" if (bdir / build.STAMP).exists() and not args.rebuild else "build"
@@ -76,7 +78,7 @@ def run(argv):
     # Rendering every template now catches template errors before any build.
     for e in study.experiments:
         res = resolutions[e.resolution]
-        render.namelist(e, res), render.streams(res), render.modulefile(e.profile)
+        render.namelist(e, res), render.streams(e, res), render.modulefile(e.profile)
         render.job(e, build.mpas_bin(build.build_dir(study_dir, sources[e.name][1], e.profile)))
 
     needed = sorted({(e.resolution, e.ntasks) for e in study.experiments})

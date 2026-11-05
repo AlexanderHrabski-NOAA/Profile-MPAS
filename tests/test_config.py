@@ -62,6 +62,59 @@ def test_validation_errors(tmp_path, entry, msg):
                         "experiments": [entry]})
 
 
+def test_io_defaults_keep_names():
+    e = config.build_experiment({"resolution": "60km", "nodes": 2, "tasks_per_node": 96}, "t")
+    assert (e.output, e.pio_num_iotasks, e.pio_stride, e.pio_io_type) == (True, 0, 1, None)
+    assert e.name == "60km_pinned_prof_n2x96"
+
+
+def test_iotasks_per_node_derives_stride():
+    e = config.build_experiment({"resolution": "60km", "nodes": 4, "tasks_per_node": 96,
+                                 "pio": {"iotasks_per_node": 2}}, "t")
+    assert (e.pio_num_iotasks, e.pio_stride) == (8, 48)
+    assert e.name.endswith("_io2pn")
+    # ntasks form: ranks per node comes from ntasks / nodes
+    e = config.build_experiment({"resolution": "60km", "nodes": 2, "ntasks": 24,
+                                 "pio": {"iotasks_per_node": 5}}, "t")
+    assert (e.pio_num_iotasks, e.pio_stride) == (10, 2)   # 12 per node // 5
+
+
+def test_io_names_and_sweep(tmp_path):
+    s = load(tmp_path, {
+        "study": "t",
+        "defaults": {"resolution": "60km", "tasks_per_node": 96, "nodes": 2},
+        "experiments": [{"sweep": {"pio.iotasks_per_node": [1, 2], "output": [True, False]}}]})
+    names = [e.name for e in s.experiments]
+    assert len(set(names)) == 4
+    assert sum("_noout_" in n for n in names) == 2
+    assert sum(n.endswith("_io1pn") for n in names) == 2
+
+
+@pytest.mark.parametrize("entry, msg", [
+    ({"output": "no"}, "'output'"),
+    ({"pio": {"bogus": 1}}, "'pio' may only"),
+    ({"pio": {"io_type": "hdf"}}, "io_type"),
+    ({"pio": {"num_iotasks": -1}}, "num_iotasks"),
+    ({"pio": {"num_iotasks": 500}}, "exceeds the rank count"),
+    ({"pio": {"num_iotasks": 8, "stride": 20}}, "exceeds the rank count"),
+    ({"pio": {"stride": 0}}, "'stride'"),
+    ({"pio": {"iotasks_per_node": 0}}, "iotasks_per_node"),
+    ({"pio": {"iotasks_per_node": 97}}, "exceeds the 96 ranks per node"),
+    ({"pio": {"iotasks_per_node": 2, "stride": 4}}, "cannot be combined"),
+    ({"pio": {"iotasks_per_node": 2, "num_iotasks": 4}}, "cannot be combined"),
+])
+def test_io_validation_errors(entry, msg):
+    spec = {"resolution": "60km", "nodes": 1, "tasks_per_node": 96, **entry}
+    with pytest.raises(SetupError, match=msg):
+        config.build_experiment(spec, "t")
+
+
+def test_iotasks_per_node_needs_even_ranks():
+    with pytest.raises(SetupError, match="not divisible"):
+        config.build_experiment({"resolution": "60km", "nodes": 3, "ntasks": 100,
+                                 "pio": {"iotasks_per_node": 1}}, "t")
+
+
 def test_duplicate_names(tmp_path):
     with pytest.raises(SetupError, match="Duplicate"):
         load(tmp_path, {"study": "t", "defaults": {"resolution": "60km"},

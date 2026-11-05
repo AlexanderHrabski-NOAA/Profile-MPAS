@@ -21,11 +21,15 @@ DEFAULTS = {
     "qos": "batch",
     "start_time": "2026-1-26_00:00:00",
     "run_duration": "7_00:00:00",
+    "output": True,
 }
 EXPERIMENT_KEYS = set(DEFAULTS) | {
-    "name", "resolution", "nodes", "tasks_per_node", "ntasks", "mpas",
+    "name", "resolution", "nodes", "tasks_per_node", "ntasks", "mpas", "pio",
 }
 MPAS_KEYS = {"ref", "repo"}
+PIO_KEYS = {"num_iotasks", "stride", "iotasks_per_node", "io_type"}
+# Values MPAS accepts for the io_type stream attribute.
+IO_TYPES = ("pnetcdf", "pnetcdf,cdf5", "netcdf", "netcdf4")
 TOP_KEYS = {"study", "defaults", "experiments"}
 
 
@@ -45,6 +49,11 @@ class Experiment:
     run_duration: str
     mpas_ref: Optional[str]           # None means the commit pinned by the submodule
     mpas_repo: Optional[str]          # None means the MPAS-Model submodule
+    output: bool = True               # False turns off restart, history and diagnostics
+    pio_num_iotasks: int = 0          # config_pio_num_iotasks; 0 = every rank does I/O
+    pio_stride: int = 1               # config_pio_stride
+    pio_iotasks_per_node: Optional[int] = None  # set when num_iotasks/stride were derived
+    pio_io_type: Optional[str] = None  # io_type on the output streams; None = MPAS default
 
     @property
     def tag(self):
@@ -108,6 +117,47 @@ def _positive_int(spec, key, where):
     return v
 
 
+def resolve_pio(pio, nodes, ntasks, tpn, where):
+    """Validate the `pio` mapping; return (num_iotasks, stride, iotasks_per_node, io_type)."""
+    if not isinstance(pio, dict) or set(pio) - PIO_KEYS:
+        raise SetupError(f"{where}: 'pio' may only contain: {', '.join(sorted(PIO_KEYS))}")
+
+    io_type = pio.get("io_type")
+    if io_type is not None and io_type not in IO_TYPES:
+        raise SetupError(f"{where}: pio.io_type must be one of "
+                         f"{', '.join(IO_TYPES)} (got {io_type!r}).")
+
+    per_node = pio.get("iotasks_per_node")
+    if per_node is not None:
+        if "num_iotasks" in pio or "stride" in pio:
+            raise SetupError(f"{where}: pio.iotasks_per_node cannot be combined with "
+                             "pio.num_iotasks or pio.stride.")
+        k = _positive_int(pio, "iotasks_per_node", where)
+        if tpn is None:
+            if ntasks % nodes:
+                raise SetupError(f"{where}: pio.iotasks_per_node needs an even rank count "
+                                 f"per node, but ntasks ({ntasks}) is not divisible by "
+                                 f"nodes ({nodes}).")
+            tpn = ntasks // nodes
+        if k > tpn:
+            raise SetupError(f"{where}: pio.iotasks_per_node ({k}) exceeds the "
+                             f"{tpn} ranks per node.")
+        # k I/O ranks on every node: ranks 0, stride, 2*stride, ... with block placement.
+        return nodes * k, tpn // k, k, io_type
+
+    num = pio.get("num_iotasks", 0)
+    if isinstance(num, bool) or not isinstance(num, int) or num < 0:
+        raise SetupError(f"{where}: pio.num_iotasks must be a non-negative integer "
+                         f"(got {num!r}).")
+    stride = _positive_int({"stride": pio.get("stride", 1)}, "stride", where)
+    if num > ntasks:
+        raise SetupError(f"{where}: pio.num_iotasks ({num}) exceeds the rank count ({ntasks}).")
+    if num > 0 and num * stride > ntasks:
+        raise SetupError(f"{where}: pio.num_iotasks * pio.stride ({num} * {stride}) "
+                         f"exceeds the rank count ({ntasks}).")
+    return num, stride, None, io_type
+
+
 def build_experiment(spec, where):
     unknown = set(spec) - EXPERIMENT_KEYS
     if unknown:
@@ -117,8 +167,9 @@ def build_experiment(spec, where):
         raise SetupError(f"{where}: 'mpas' may only contain: {', '.join(sorted(MPAS_KEYS))}")
 
     spec = {**DEFAULTS, **spec}
-    if not isinstance(spec["profile"], bool):
-        raise SetupError(f"{where}: 'profile' must be true or false.")
+    for flag in ("profile", "output"):
+        if not isinstance(spec[flag], bool):
+            raise SetupError(f"{where}: '{flag}' must be true or false.")
     if not spec.get("resolution"):
         raise SetupError(f"{where}: 'resolution' is required.")
 
@@ -136,12 +187,25 @@ def build_experiment(spec, where):
         if ntasks < nodes:
             raise SetupError(f"{where}: ntasks ({ntasks}) is less than nodes ({nodes}).")
 
+    pio_n, pio_stride, pio_pn, io_type = resolve_pio(
+        spec.get("pio") or {}, nodes, ntasks, tpn, where)
+
     ref = mpas.get("ref")
     name = spec.get("name")
     if not name:
         shape = f"n{nodes}x{tpn}" if tpn else f"n{nodes}t{ntasks}"
-        name = "_".join([spec["resolution"], slug(ref or "pinned"),
-                         "prof" if spec["profile"] else "norm", shape])
+        parts = [spec["resolution"], slug(ref or "pinned"),
+                 "prof" if spec["profile"] else "norm", shape]
+        # Only non-default I/O settings appear, so existing names are unchanged.
+        if not spec["output"]:
+            parts.append("noout")
+        if pio_pn:
+            parts.append(f"io{pio_pn}pn")
+        elif pio_n or pio_stride != 1:
+            parts.append(f"io{pio_n}s{pio_stride}")
+        if io_type:
+            parts.append(slug(io_type))
+        name = "_".join(parts)
     if slug(name) != name:
         raise SetupError(f"{where}: name '{name}' has characters unsafe for a directory.")
 
@@ -151,6 +215,8 @@ def build_experiment(spec, where):
         account=spec["account"], qos=spec["qos"], profile=spec["profile"],
         start_time=spec["start_time"], run_duration=spec["run_duration"],
         mpas_ref=None if ref is None else str(ref), mpas_repo=mpas.get("repo"),
+        output=spec["output"], pio_num_iotasks=pio_n, pio_stride=pio_stride,
+        pio_iotasks_per_node=pio_pn, pio_io_type=io_type,
     )
 
 

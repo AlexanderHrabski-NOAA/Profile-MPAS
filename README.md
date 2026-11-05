@@ -116,9 +116,16 @@ Sweep keys can reach into `mpas` with a dotted name, which is how you compare MP
 | `walltime` | `00:40:00` | Slurm time limit. |
 | `account`, `qos` | `fv3-cpu`, `batch` | Slurm account and QOS. |
 | `start_time`, `run_duration` | `2026-1-26_00:00:00`, `7_00:00:00` | Written to `config_start_time` and `config_run_duration`. |
+| `output` | `true` | `false` turns off all model output: restart, history, and diagnostics get `output_interval="none"`. Input streams are untouched. |
+| `pio.num_iotasks` | `0` | `config_pio_num_iotasks`: how many ranks do file I/O. `0` means every rank does. |
+| `pio.stride` | `1` | `config_pio_stride`: rank spacing between I/O ranks. Needs `num_iotasks * stride <= ranks`. |
+| `pio.iotasks_per_node` | | Instead of the two above: put this many I/O ranks on every node. Sets `num_iotasks = nodes * k` and `stride = ranks_per_node // k`, so with 96 ranks per node `iotasks_per_node: 2` gives stride 48. Cannot be combined with `num_iotasks` or `stride`. With `ntasks`, it must divide evenly across nodes. |
+| `pio.io_type` | MPAS default (`pnetcdf`) | One of `pnetcdf`, `pnetcdf,cdf5`, `netcdf`, `netcdf4`. Written as the `io_type` attribute on the restart, history, and diagnostics streams only; PIO must have been built with support for it. |
 | `name` | generated | Experiment directory name. |
 
-Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` or `norm`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Names must be unique within a study.
+Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` or `norm`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Non-default I/O settings add a suffix (`_noout`, `_io2pn` for `iotasks_per_node`, `_io8s48` for `num_iotasks`/`stride`, then the `io_type`), so sweeping them gives distinct names. Names must be unique within a study.
+
+`pio` and `mpas` are nested, so sweeps reach into them with dotted keys, for example `sweep: {nodes: [1, 2, 4], pio.iotasks_per_node: [1, 2], output: [true, false]}`. `studies/io-scaling-60km.yaml` is a worked example. The MPAS documentation suggests one or two I/O ranks per node as a starting point.
 
 Note that `profile` is a property of the experiment, not of MPAS. It changes how MPAS is built (the compiler wrappers in the modulefile) and how it is launched, but not which source is used.
 
@@ -215,7 +222,7 @@ The files in `templates/` are [Jinja2](https://jinja.palletsprojects.com/) templ
 
 - `job.fcst.j2`: the Slurm script. The profiled and unprofiled versions are the same template; the Score-P environment and the `scalasca --analyze` launcher appear only when `profile` is true.
 - `ursa.intel.lua.j2`: the modulefile used for both the build and the run. The profiled version differs only in the `scorep-` prefix on the compiler wrappers.
-- `namelist.atmosphere.j2` and `streams.atmosphere.j2`: the MPAS namelist and streams. Only the values that depend on the resolution, the start time and duration, and the partition prefix are variables; everything else is as you would write it by hand.
+- `namelist.atmosphere.j2` and `streams.atmosphere.j2`: the MPAS namelist and streams. Only the values that depend on the resolution, the start time and duration, the partition prefix, and the `output` and `pio` settings are variables; everything else is as you would write it by hand.
 
 Missing variables are an error rather than an empty string, so if you add `{{ something }}` to a template and forget to pass it, the dry run will tell you.
 

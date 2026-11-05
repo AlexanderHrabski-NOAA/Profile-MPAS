@@ -28,9 +28,10 @@ def job(exp, mpas_bin):
 def namelist(exp, res):
     return _env.get_template("namelist.atmosphere.j2").render(
         dt=res.dt, start_time=exp.start_time, run_duration=exp.run_duration,
-        partition_prefix=res.partition_prefix)
+        partition_prefix=res.partition_prefix,
+        pio_num_iotasks=exp.pio_num_iotasks, pio_stride=exp.pio_stride)
 
 
-def streams(res):
+def streams(exp, res):
     return _env.get_template("streams.atmosphere.j2").render(
-        stem=res.stem, mesh=res.mesh)
+        stem=res.stem, mesh=res.mesh, output=exp.output, io_type=exp.pio_io_type)
