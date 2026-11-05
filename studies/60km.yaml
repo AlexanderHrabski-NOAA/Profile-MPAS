@@ -7,7 +7,7 @@ defaults:
   tasks_per_node: 96
   profile: true
   walltime: "00:40:00"
-  run_duration: "1_00:00:00"
+  run_duration: "7_00:00:00"
   mpas:
     ref: MPAS-v8.4.2-1.19   # branch, tag, or hash; omit to use the submodule pin
 

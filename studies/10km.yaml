@@ -12,4 +12,4 @@ defaults:
     ref: MPAS-v8.4.2-1.19   # branch, tag, or hash; omit to use the submodule pin
 
 experiments:
-  - nodes: 64
+  - nodes: 16
