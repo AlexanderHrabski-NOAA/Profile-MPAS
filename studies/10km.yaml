@@ -5,7 +5,7 @@ study: 10km
 defaults:
   resolution: 10km
   tasks_per_node: 96
-  profile: true
+  profile: scalasca
   walltime: "02:00:00"
   run_duration: "1_00:00:00"
   mpas:

@@ -1,4 +1,4 @@
-"""Clone MPAS at a ref and build it. One build per (commit, profile)."""
+"""Clone MPAS at a ref and build it. One build per (commit, scorep)."""
 
 import shutil
 import subprocess
@@ -74,15 +74,16 @@ def resolve(exp):
     return source, sha
 
 
-def build_dir(study_dir, sha, profile):
-    return Path(study_dir) / "builds" / f"{sha[:12]}-{'prof' if profile else 'norm'}"
+def build_dir(study_dir, sha, tag):
+    """`tag` is Experiment.tag; experiments with the same tag share a build."""
+    return Path(study_dir) / "builds" / f"{sha[:12]}-{tag}"
 
 
 def mpas_bin(bdir):
     return Path(bdir) / "build" / "bin" / "mpas_atmosphere"
 
 
-def ensure_build(bdir, source, sha, profile, rebuild=False):
+def ensure_build(bdir, source, sha, scorep, rebuild=False):
     """Clone and build unless a finished build already exists."""
     bdir = Path(bdir)
     if (bdir / STAMP).exists() and not rebuild:
@@ -102,9 +103,9 @@ def ensure_build(bdir, source, sha, profile, rebuild=False):
     # build.sh reads the modulefile in the clone, so the rendered one goes there.
     mod = bdir / "modulefiles" / "mpas" / "ursa.intel.lua"
     mod.parent.mkdir(parents=True, exist_ok=True)
-    mod.write_text(render.modulefile(profile))
+    mod.write_text(render.modulefile(scorep))
 
-    print(f"  Building {bdir.name} ({'with' if profile else 'without'} Scorep wrappers)")
+    print(f"  Building {bdir.name} ({'with' if scorep else 'without'} Scorep wrappers)")
     subprocess.run(["bash", "-c", BUILD_SCRIPT, "build", str(bdir)], check=True)
     if not mpas_bin(bdir).exists():
         raise SetupError(f"Build finished but {mpas_bin(bdir)} does not exist.")

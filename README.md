@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository sets up, builds, and submits MPAS-Atmosphere experiments on Ursa, with or without Scalasca/Score-P profiling. You describe a *study* in a single YAML file: which MPAS to use, which resolution, and how many nodes and ranks. One command then builds MPAS, generates any missing grid partitions, writes a run directory for every experiment in the study, and submits them. The main use case is a strong-scaling study, where the same case runs at 1, 2, 4, ... nodes, but nothing stops you from comparing MPAS versions or profiled and unprofiled builds in the same study.
+This repository sets up, builds, and submits MPAS-Atmosphere experiments on Ursa, either with Scalasca/Score-P profiling or as a plain `native` build that relies on MPAS's own timers. You describe a *study* in a single YAML file: which MPAS to use, which resolution, and how many nodes and ranks. One command then builds MPAS, generates any missing grid partitions, writes a run directory for every experiment in the study, and submits them. The main use case is a strong-scaling study, where the same case runs at 1, 2, 4, ... nodes, but nothing stops you from comparing MPAS versions or profiling modes in the same study. `plot-timing.py` then turns the logs of a finished run, or a whole study, into summary tables and figures (see [Looking at Timing](#looking-at-timing)).
 
 Each experiment directory records exactly what produced it (the MPAS commit, this repository's commit, the rendered job card, the `gpmetis` command), so a result can be reproduced later.
 
@@ -83,7 +83,7 @@ study: strong-scaling-60km
 defaults:
   resolution: 60km
   tasks_per_node: 96
-  profile: true
+  profile: scalasca
   walltime: "00:40:00"
 
 experiments:
@@ -91,12 +91,12 @@ experiments:
       nodes: [1, 2, 4, 8, 16]
 ```
 
-Each entry in `experiments` is laid over `defaults` to make an experiment. An entry with a `sweep` expands into one experiment per combination of the listed values (a cartesian product), so the file above makes five experiments. You can mix sweeps and single experiments freely, for example to add an unprofiled baseline:
+Each entry in `experiments` is laid over `defaults` to make an experiment. An entry with a `sweep` expands into one experiment per combination of the listed values (a cartesian product), so the file above makes five experiments. You can mix sweeps and single experiments freely, for example to add a `native` baseline with no instrumentation overhead:
 
 ```yaml
 experiments:
   - sweep: {nodes: [1, 2, 4, 8]}
-  - {name: baseline_noprof, nodes: 4, profile: false}
+  - {name: baseline_native, nodes: 4, profile: native}
 ```
 
 Sweep keys can reach into `mpas` with a dotted name, which is how you compare MPAS versions: `sweep: {mpas.ref: [MPAS-v8.4.2-1.19, develop], nodes: [4, 8]}`.
@@ -110,7 +110,7 @@ Sweep keys can reach into `mpas` with a dotted name, which is how you compare MP
 | `tasks_per_node` | | MPI ranks per node. Total ranks = `nodes * tasks_per_node`. |
 | `ntasks` | | Total MPI ranks instead. Give exactly one of `tasks_per_node` or `ntasks`. |
 | `cpus_per_task` | `1` | Threads per rank. |
-| `profile` | `true` | Build and run with Score-P instrumentation and `scalasca --analyze`. |
+| `profile` | `scalasca` | `scalasca`: build with the Score-P compiler wrappers and run under `scalasca --analyze`. `native`: a plain build and run; timing comes from MPAS's own timers. The old `true` and `false` still work and mean `scalasca` and `native`. |
 | `mpas.ref` | submodule pin | Branch, tag, or commit hash of MPAS to build. |
 | `mpas.repo` | the `MPAS-Model` submodule | Path or URL of a different MPAS repository. |
 | `walltime` | `00:40:00` | Slurm time limit. |
@@ -123,11 +123,11 @@ Sweep keys can reach into `mpas` with a dotted name, which is how you compare MP
 | `pio.io_type` | MPAS default (`pnetcdf`) | One of `pnetcdf`, `pnetcdf,cdf5`, `netcdf`, `netcdf4`. Written as the `io_type` attribute on the restart, history, and diagnostics streams only; PIO must have been built with support for it. |
 | `name` | generated | Experiment directory name. |
 
-Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` or `norm`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Non-default I/O settings add a suffix (`_noout`, `_io2pn` for `iotasks_per_node`, `_io8s48` for `num_iotasks`/`stride`, then the `io_type`), so sweeping them gives distinct names. Names must be unique within a study.
+Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` (for `scalasca`) or `native`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Non-default I/O settings add a suffix (`_noout`, `_io2pn` for `iotasks_per_node`, `_io8s48` for `num_iotasks`/`stride`, then the `io_type`), so sweeping them gives distinct names. Names must be unique within a study.
 
 `pio` and `mpas` are nested, so sweeps reach into them with dotted keys, for example `sweep: {nodes: [1, 2, 4], pio.iotasks_per_node: [1, 2], output: [true, false]}`. `studies/io-scaling-60km.yaml` is a worked example. The MPAS documentation suggests one or two I/O ranks per node as a starting point.
 
-Note that `profile` is a property of the experiment, not of MPAS. It changes how MPAS is built (the compiler wrappers in the modulefile) and how it is launched, but not which source is used.
+Note that `profile` is a property of the experiment, not of MPAS. It changes how MPAS is built (the compiler wrappers in the modulefile) and how it is launched, but not which source is used. MPAS's own timers are compiled into every build, so every run, `scalasca` or `native`, writes its timing to `log.atmosphere.0000.out`. Scalasca runs just carry the instrumentation overhead, so use `native` when you want clean timings, such as for a scaling study.
 
 ## Running a Study
 
@@ -216,12 +216,38 @@ scalasca --examine <the scorep_ directory>
 
 The `sourceme.sh` module path is specific to one user's scratch directory, so you will likely need to edit it for yours. Edit `config/scalasca/scorep.filt` to change what Score-P filters out of the measurement; it is copied into every profiled experiment when it is staged.
 
+## Looking at Timing
+
+MPAS times itself. Each step writes `Timing for integration step` to the log, each output write and the initial read write their own timing lines, and at shutdown rank 0's log gets a table of MPAS's timers (`time integration`, `physics driver`, individual schemes, and so on) reduced over all ranks. That is all in `log.atmosphere.0000.out` in the experiment directory, and nothing needs to be switched on.
+
+`plot-timing.py` reads those logs. It takes a log file, an experiment directory, or a whole study directory (anything holding logs, found recursively), so you can copy `runs/<study>/experiments` to your own machine and run it there. It needs nothing from Ursa or Slurm. Experiment directories also carry `provenance.yaml`, which supplies the node count, resolution, and mode; a bare log works too, with those left blank.
+
+```bash
+./plot-timing.py runs/strong-scaling-60km                # interactive windows
+./plot-timing.py runs/strong-scaling-60km --save out     # PNG figures plus two CSV files
+./plot-timing.py runs/10km/experiments/10km_*_n64x96     # a single run
+```
+
+It always prints a table of the runs first (status, wall time, simulated days per day, mean step time, phase shares) and any caveats. By default it opens interactive windows, which needs a display; over ssh use `--save DIR`, which writes the figures and `results.csv` (one row per run) and `timers.csv` (every run's timer tree, one row per timer). Other flags: `--format png|pdf|svg`, `--no-csv`, and `--x nodes` to put nodes on the scaling plots' x axis instead of ranks. The figures need `matplotlib` (`pip install -r requirements.txt`); the table and CSV files do not.
+
+**One run** gets two figures. *Overview* shows the wall time of every step (with the periodic radiation steps and the step before each output marked), where the wall time goes (integration, output, setup), and how long each output write took. *Components* shows the largest timers under `time integration`, the physics schemes, and how much time each component loses to load imbalance.
+
+**A study** (several runs) gets three. *Scaling*, when the runs differ in rank count, shows total time, integration time, speedup, and parallel efficiency against perfect scaling. *Breakdown* shows the phases and the components in core-seconds, where flat bars mean perfect scaling and growth is lost efficiency. *Quality* shows load imbalance by component and run, the spread of step times, throughput in simulated days per day, and cost in node-hours per simulated day. Runs that share a resolution, mode, and I/O settings form one scaling series; mixing modes or settings gives one line per series.
+
+A few things worth knowing when you read the numbers:
+
+- **The mean step time is total over steps, not the median.** Radiation runs every 30 model minutes and costs several times a normal step, so the median understates the real cost.
+- **Timer values are maxima over ranks.** A timer's `total` is the slowest rank's time, so a parent's children can add up to slightly more than the parent, and the shares from the table are approximate. `par_eff` is the mean over the maximum, so `1 − par_eff` is the share of that timer's time spent waiting on the slowest rank.
+- **Output time comes from the write lines, not the timer table.** The `stream_output` timer counts every check of the output alarm, not just the real writes.
+- **A run that did not finish** is marked `incomplete` (or `error` if MPAS logged errors). It has its steps but no timer table, so it appears in the table and the step plots only.
+- **Scalasca runs are slower** than native ones because of instrumentation. Compare like with like; the tool warns when a study mixes them.
+
 ## Customizing
 
 The files in `templates/` are [Jinja2](https://jinja.palletsprojects.com/) templates, and they are the single source of truth for what gets written to an experiment:
 
-- `job.fcst.j2`: the Slurm script. The profiled and unprofiled versions are the same template; the Score-P environment and the `scalasca --analyze` launcher appear only when `profile` is true.
-- `ursa.intel.lua.j2`: the modulefile used for both the build and the run. The profiled version differs only in the `scorep-` prefix on the compiler wrappers.
+- `job.fcst.j2`: the Slurm script. The `scalasca` and `native` versions are the same template; the Score-P environment and the `scalasca --analyze` launcher appear only in `scalasca` mode.
+- `ursa.intel.lua.j2`: the modulefile used for both the build and the run. The `scalasca` version differs only in the `scorep-` prefix on the compiler wrappers.
 - `namelist.atmosphere.j2` and `streams.atmosphere.j2`: the MPAS namelist and streams. Only the values that depend on the resolution, the start time and duration, the partition prefix, and the `output` and `pio` settings are variables; everything else is as you would write it by hand.
 
 Missing variables are an error rather than an empty string, so if you add `{{ something }}` to a template and forget to pass it, the dry run will tell you.
@@ -233,5 +259,7 @@ To add a new setup key, add it to `DEFAULTS` or `EXPERIMENT_KEYS` in `mpas_profi
 ```bash
 python -m pytest tests
 ```
+
+The tests for `plot-timing.py` draw real figures and are skipped when `matplotlib` is not installed. They run on a trimmed copy of a real log (`tests/data/`) and on synthetic logs written by `tests/logsynth.py`, which follow the same fixed-width format.
 
 The unit tests cover the setup parsing and the templates. The end-to-end test runs a copy of the whole tool against a small fake MPAS repository, with stand-ins for `module`, `sbatch`, and `gpmetis`, so it needs no cluster. It checks that a sweep makes one build, the right partitions, and one submission per experiment, and that a failed build submits nothing. It does not replace running a real job on Ursa.

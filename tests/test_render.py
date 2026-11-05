@@ -12,9 +12,9 @@ def test_modulefile_wrappers():
     assert "scorep" not in render.modulefile(False)
 
 
-def test_job_profile_vs_normal():
-    prof = render.job(exp(profile=True), "/b/mpas_atmosphere")
-    norm = render.job(exp(profile=False), "/b/mpas_atmosphere")
+def test_job_scalasca_vs_native():
+    prof = render.job(exp(profile="scalasca"), "/b/mpas_atmosphere")
+    norm = render.job(exp(profile="native"), "/b/mpas_atmosphere")
     assert "scalasca --analyze srun -N 4 --tasks-per-node=96" in prof
     assert "SCOREP_FILTERING_FILE" in prof
     assert "scalasca" not in norm and "SCOREP" not in norm

@@ -14,7 +14,7 @@ from . import REPO, SetupError
 # Everything an experiment (or `defaults`) may set. Adding a key to the setup
 # YAML means adding it here and using it in a template.
 DEFAULTS = {
-    "profile": True,
+    "profile": "scalasca",
     "cpus_per_task": 1,
     "walltime": "00:40:00",
     "account": "fv3-cpu",
@@ -26,6 +26,11 @@ DEFAULTS = {
 EXPERIMENT_KEYS = set(DEFAULTS) | {
     "name", "resolution", "nodes", "tasks_per_node", "ntasks", "mpas", "pio",
 }
+# `scalasca` builds with the Score-P wrappers and runs under scalasca. `native` is a plain
+# build that relies on MPAS's own timers (which write to the log in every mode). The old
+# boolean form is still accepted: true -> scalasca, false -> native.
+PROFILE_MODES = ("scalasca", "native")
+_PROFILE_ALIASES = {True: "scalasca", False: "native"}
 MPAS_KEYS = {"ref", "repo"}
 PIO_KEYS = {"num_iotasks", "stride", "iotasks_per_node", "io_type"}
 # Values MPAS accepts for the io_type stream attribute.
@@ -44,7 +49,7 @@ class Experiment:
     walltime: str
     account: str
     qos: str
-    profile: bool
+    profile: str                      # one of PROFILE_MODES
     start_time: str
     run_duration: str
     mpas_ref: Optional[str]           # None means the commit pinned by the submodule
@@ -56,8 +61,13 @@ class Experiment:
     pio_io_type: Optional[str] = None  # io_type on the output streams; None = MPAS default
 
     @property
+    def scorep(self):
+        """True when MPAS is built with the Score-P wrappers and run under scalasca."""
+        return self.profile == "scalasca"
+
+    @property
     def tag(self):
-        return "prof" if self.profile else "norm"
+        return "prof" if self.scorep else "native"
 
 
 @dataclass
@@ -167,9 +177,15 @@ def build_experiment(spec, where):
         raise SetupError(f"{where}: 'mpas' may only contain: {', '.join(sorted(MPAS_KEYS))}")
 
     spec = {**DEFAULTS, **spec}
-    for flag in ("profile", "output"):
-        if not isinstance(spec[flag], bool):
-            raise SetupError(f"{where}: '{flag}' must be true or false.")
+    if not isinstance(spec["output"], bool):
+        raise SetupError(f"{where}: 'output' must be true or false.")
+    profile = spec["profile"]
+    if isinstance(profile, bool):
+        profile = _PROFILE_ALIASES[profile]
+    if profile not in PROFILE_MODES:
+        raise SetupError(f"{where}: 'profile' must be one of "
+                         f"{', '.join(PROFILE_MODES)} (got {profile!r}).")
+    spec["profile"] = profile
     if not spec.get("resolution"):
         raise SetupError(f"{where}: 'resolution' is required.")
 
@@ -195,7 +211,7 @@ def build_experiment(spec, where):
     if not name:
         shape = f"n{nodes}x{tpn}" if tpn else f"n{nodes}t{ntasks}"
         parts = [spec["resolution"], slug(ref or "pinned"),
-                 "prof" if spec["profile"] else "norm", shape]
+                 "prof" if profile == "scalasca" else profile, shape]
         # Only non-default I/O settings appear, so existing names are unchanged.
         if not spec["output"]:
             parts.append("noout")

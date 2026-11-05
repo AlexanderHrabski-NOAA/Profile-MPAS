@@ -38,7 +38,7 @@ def profile_repo_state():
 def stage(exp, res, edir, bdir, mpas_info, gpmetis_cmd):
     """Create the experiment directory contents (everything except the job id)."""
     edir.mkdir(parents=True)
-    mod_text = render.modulefile(exp.profile)
+    mod_text = render.modulefile(exp.scorep)
 
     (edir / "namelist.atmosphere").write_text(render.namelist(exp, res))
     (edir / "streams.atmosphere").write_text(render.streams(exp, res))
@@ -50,7 +50,7 @@ def stage(exp, res, edir, bdir, mpas_info, gpmetis_cmd):
     for f in sorted((REPO / "config" / "mpas").glob("stream_list.*")):
         shutil.copy(f, edir)
     shutil.copy(REPO / "utils" / "module-setup.sh", edir)
-    if exp.profile:
+    if exp.scorep:
         shutil.copy(REPO / "config" / "scalasca" / "scorep.filt", edir)
 
     # Large data is linked.

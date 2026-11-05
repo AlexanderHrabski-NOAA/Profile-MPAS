@@ -19,7 +19,7 @@ def modulefile(profile):
 
 def job(exp, mpas_bin):
     return _env.get_template("job.fcst.j2").render(
-        name=exp.name, tag=exp.tag, profile=exp.profile, account=exp.account,
+        name=exp.name, tag=exp.tag, profile=exp.scorep, account=exp.account,
         qos=exp.qos, nodes=exp.nodes, tasks_per_node=exp.tasks_per_node,
         ntasks=exp.ntasks, cpus_per_task=exp.cpus_per_task,
         walltime=exp.walltime, mpas_bin=mpas_bin)

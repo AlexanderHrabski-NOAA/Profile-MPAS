@@ -36,7 +36,32 @@ def test_entry_overrides_defaults_and_dotted_sweep(tmp_path):
                      "mpas": {"ref": "a"}},
         "experiments": [{"profile": False, "sweep": {"mpas.ref": ["a", "b"]}}],
     })
-    assert [(e.mpas_ref, e.profile) for e in s.experiments] == [("a", False), ("b", False)]
+    assert [(e.mpas_ref, e.profile) for e in s.experiments] == [("a", "native"), ("b", "native")]
+
+
+@pytest.mark.parametrize("value, mode, scorep, tag", [
+    ("scalasca", "scalasca", True, "prof"),
+    ("native", "native", False, "native"),
+    (True, "scalasca", True, "prof"),      # old boolean form
+    (False, "native", False, "native"),
+])
+def test_profile_modes(value, mode, scorep, tag):
+    e = config.build_experiment(
+        {"resolution": "60km", "nodes": 2, "tasks_per_node": 96, "profile": value}, "t")
+    assert (e.profile, e.scorep, e.tag) == (mode, scorep, tag)
+    assert f"_{tag}_n2x96" in e.name
+
+
+def test_profile_default_is_scalasca():
+    e = config.build_experiment({"resolution": "60km", "nodes": 1, "tasks_per_node": 96}, "t")
+    assert e.profile == "scalasca" and e.name.endswith("_prof_n1x96")
+
+
+@pytest.mark.parametrize("bad", ["yes", "Native", "prof", 1, None, ["native"]])
+def test_profile_rejects_other_values(bad):
+    with pytest.raises(SetupError, match="'profile' must be one of scalasca, native"):
+        config.build_experiment(
+            {"resolution": "60km", "nodes": 1, "tasks_per_node": 96, "profile": bad}, "t")
 
 
 def test_sweep_is_cartesian(tmp_path):
@@ -55,6 +80,7 @@ def test_sweep_is_cartesian(tmp_path):
     ({"nodes": 1, "tasks_per_node": 2, "bogus": 1}, "unknown key"),
     ({"nodes": 1, "tasks_per_node": 2, "mpas": {"profile": True}}, "'mpas' may only"),
     ({"nodes": 1, "tasks_per_node": 2, "profile": "yes"}, "'profile'"),
+    ({"nodes": 1, "tasks_per_node": 2, "output": "yes"}, "'output' must be true or false"),
 ])
 def test_validation_errors(tmp_path, entry, msg):
     with pytest.raises(SetupError, match=msg):

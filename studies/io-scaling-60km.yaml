@@ -5,7 +5,7 @@ study: io-scaling-60km
 defaults:
   resolution: 60km
   tasks_per_node: 96
-  profile: true
+  profile: scalasca
   walltime: "00:40:00"
   run_duration: "1_00:00:00"
   mpas:

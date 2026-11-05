@@ -62,7 +62,7 @@ def run(argv):
     builds = {}
     for e in study.experiments:
         source, sha = sources[e.name]
-        builds.setdefault((sha, e.profile), (source, build.build_dir(study_dir, sha, e.profile)))
+        builds.setdefault((sha, e.scorep), (source, build.build_dir(study_dir, sha, e.tag)))
 
     print("\nExperiments:")
     table([[e.name, e.resolution, e.nodes, e.ntasks, e.tasks_per_node or "-",
@@ -71,15 +71,15 @@ def run(argv):
            for e in study.experiments],
           ["name", "res", "nodes", "ranks", "tpn", "mpas", "profile", "output", "pio"])
     print(f"\nBuilds: {len(builds)}")
-    for (sha, profile), (source, bdir) in builds.items():
+    for (sha, scorep), (source, bdir) in builds.items():
         state = "reuse" if (bdir / build.STAMP).exists() and not args.rebuild else "build"
         print(f"  {bdir.name}  [{state}]")
 
     # Rendering every template now catches template errors before any build.
     for e in study.experiments:
         res = resolutions[e.resolution]
-        render.namelist(e, res), render.streams(e, res), render.modulefile(e.profile)
-        render.job(e, build.mpas_bin(build.build_dir(study_dir, sources[e.name][1], e.profile)))
+        render.namelist(e, res), render.streams(e, res), render.modulefile(e.scorep)
+        render.job(e, build.mpas_bin(build.build_dir(study_dir, sources[e.name][1], e.tag)))
 
     needed = sorted({(e.resolution, e.ntasks) for e in study.experiments})
     gpmetis = {}
@@ -98,8 +98,8 @@ def run(argv):
     print("\nBuilding...")
     study_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(args.setup, study_dir / "study.yaml")
-    for (sha, profile), (source, bdir) in builds.items():
-        build.ensure_build(bdir, source, sha, profile, rebuild=args.rebuild)
+    for (sha, scorep), (source, bdir) in builds.items():
+        build.ensure_build(bdir, source, sha, scorep, rebuild=args.rebuild)
 
     print("\nPartitioning...")
     for key, n in needed:
@@ -110,7 +110,7 @@ def run(argv):
     for e in study.experiments:
         res = resolutions[e.resolution]
         source, sha = sources[e.name]
-        bdir = build.build_dir(study_dir, sha, e.profile)
+        bdir = build.build_dir(study_dir, sha, e.tag)
         edir = edirs[e.name]
         if edir.exists():
             shutil.rmtree(edir)

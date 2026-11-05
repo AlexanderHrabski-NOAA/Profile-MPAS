@@ -161,10 +161,11 @@ def test_dry_run_touches_nothing(world):
     assert world.log.read_text() == ""
 
 
-def test_noprofile_and_bad_ref(world):
-    r = world.go(study(world.mpas, nodes=(2,), profile=False), "--no-submit")
+def test_native_and_bad_ref(world):
+    r = world.go(study(world.mpas, nodes=(2,), profile="native"), "--no-submit")
     assert r.returncode == 0, r.stderr
-    e = world.root / "runs/t/experiments/60km_v1_norm_n2x96"
+    assert next((world.root / "runs/t/builds").iterdir()).name.endswith("-native")
+    e = world.root / "runs/t/experiments/60km_v1_native_n2x96"
     assert not (e / "scorep.filt").exists()
     assert "scorep" not in (e / "modulefiles/mpas/ursa.intel.lua").read_text()
     s = study(world.mpas)
