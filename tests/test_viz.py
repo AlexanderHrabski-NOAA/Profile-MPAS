@@ -92,6 +92,36 @@ def test_two_series_get_a_legend_and_distinct_colors(tmp_path):
     assert any("mixed" in t.get_text() for t in figs["scaling"].texts)
 
 
+def test_bars_are_clustered_by_rank_count_with_one_bar_per_series(tmp_path):
+    root = tmp_path / "tpn"
+    for n in (16, 32, 64):
+        for tpn in (96, 192):
+            logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    runs = analysis.load_runs([root])
+    lay = viz._Layout(runs)
+    assert lay.grouped and lay.tags == ["96/node", "192/node"]    # numeric order, not "192" < "96"
+    assert lay.slots == [1536, 3072, 6144, 12288]
+    by_ranks = {}
+    for r, x in zip(runs, lay.xs):
+        by_ranks.setdefault(r.ntasks, []).append(x)
+    assert len(by_ranks[3072]) == 2 and len(set(by_ranks[3072])) == 2   # 16x192 and 32x96
+    assert all(int(x) == lay.slots.index(k) or abs(x - lay.slots.index(k)) < 0.5
+               for k, xs in by_ranks.items() for x in xs)
+    import matplotlib.pyplot as plt
+    figs = viz.build_figures(plt, runs)
+    thr = figs["quality"].axes[2]                                 # throughput
+    assert [t.get_text() for t in thr.get_legend().get_texts()] == ["96/node", "192/node"]
+    assert [t.get_text() for t in thr.get_xticklabels()] == ["1536", "3072", "6144", "12288"]
+
+
+def test_repeated_rank_counts_fall_back_to_one_bar_per_run(tmp_path):
+    root = tmp_path / "rep"
+    for name in ("a", "b"):
+        logsynth.write_experiment(root, name, 1, outputs=1 if name == "b" else 12)
+    lay = viz._Layout(analysis.load_runs([root]))
+    assert not lay.grouped and lay.xs == [0, 1]
+
+
 def test_incomplete_runs_do_not_break_the_figures(tmp_path):
     root = tmp_path / "bad"
     logsynth.write_experiment(root, "good", 1)

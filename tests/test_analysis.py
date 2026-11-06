@@ -28,6 +28,17 @@ def test_find_logs_in_a_study_tree(study):
         "60km_native_n1x96", "60km_native_n2x96", "60km_native_n4x96", "60km_native_n8x96"]
 
 
+def test_find_logs_finds_wider_rank_zero_log(tmp_path):
+    # MPAS pads the rank number to the rank-count width: 12288 ranks -> five digits.
+    d = logsynth.write_experiment(tmp_path, "wide", 64, tasks_per_node=192)
+    (d / "log.atmosphere.0000.out").rename(d / "log.atmosphere.00000.out")
+    (d / "log.atmosphere.00001.out").write_text("")          # other ranks are not run logs
+    (found,) = analysis.find_logs([tmp_path])
+    assert found.name == "log.atmosphere.00000.out"
+    (run,) = analysis.load_runs([tmp_path])
+    assert run.ntasks == 64 * 192
+
+
 def test_find_logs_accepts_a_file_a_dir_or_both_without_duplicates(study):
     one = study / "experiments" / "60km_native_n2x96"
     assert len(analysis.find_logs([one])) == 1
@@ -192,8 +203,24 @@ def test_groups_separate_series(tmp_path):
     assert len(g) == 2
     assert {k[1] for k in g} == {"native", "scalasca"}
     assert all([r.ntasks for r in rs] == [96, 192] for rs in g.values())
-    assert analysis.group_label(("60km", "native", False, "1/node")) == \
+    assert analysis.group_label(("60km", "native", False, "1/node", None)) == \
         "60km · native · no output · pio 1/node"
+    assert analysis.group_label(("10km", "native", None, None, 96)) == \
+        "10km · native · 96 ranks/node"
+
+
+def test_groups_split_by_tasks_per_node(tmp_path):
+    # 32x192 and 64x96 both have 6144 ranks; they belong to different series.
+    for n in (16, 32, 64):
+        for tpn in (96, 192):
+            logsynth.write_experiment(tmp_path, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    runs = analysis.load_runs([tmp_path])
+    g = analysis.groups(runs)
+    assert sorted(k[4] for k in g) == [96, 192]
+    for key, rs in g.items():
+        ranks = [r.ntasks for r in rs]
+        assert ranks == sorted(set(ranks)) and {r.tasks_per_node for r in rs} == {key[4]}
+    assert not any("share a rank count" in n for n in analysis.caveats(runs))
 
 
 def test_caveats(tmp_path):

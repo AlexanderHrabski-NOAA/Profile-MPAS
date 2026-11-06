@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 from . import SetupError
-from .timing import LOG_NAME, RunLog, parse_log
+from .timing import LOG_NAME, LOG_RE, RunLog, parse_log
 
 PROVENANCE = "provenance.yaml"
 # Directories that can hold huge trees but never a run log.
@@ -60,6 +60,11 @@ class Run:
     def ntasks(self):
         """MPI ranks. The log is the authority; provenance is the fallback."""
         return self.log.ntasks or self.meta.get("ntasks")
+
+    @property
+    def tasks_per_node(self):
+        """Ranks per node, or None (no provenance, or the study gave a total ntasks)."""
+        return self.meta.get("tasks_per_node")
 
     @property
     def resolution(self):
@@ -107,8 +112,9 @@ def find_logs(paths):
             hits = []
             for root, dirs, files in os.walk(p):
                 dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
-                if LOG_NAME in files:
-                    hits.append(Path(root) / LOG_NAME)
+                names = sorted(f for f in files if LOG_RE.fullmatch(f))
+                if names:
+                    hits.append(Path(root) / names[0])
             if not hits:
                 raise SetupError(f"No {LOG_NAME} found under {p}.")
             for h in hits:
@@ -143,7 +149,7 @@ def load_runs(paths):
         seen[r.label] = seen.get(r.label, 0) + 1
         if seen[r.label] > 1:
             r.label = f"{r.label}#{seen[r.label]}"
-    runs.sort(key=lambda r: (str(group_key(r)), r.ntasks or 0, r.label))
+    runs.sort(key=lambda r: (_sortable(group_key(r)), r.ntasks or 0, r.label))
     return runs
 
 
@@ -250,17 +256,41 @@ def components(run, parent):
 
 def group_key(run):
     """Runs that differ only in size belong to one scaling series."""
-    return (run.resolution, run.mode, run.output, run.pio)
+    return (run.resolution, run.mode, run.output, run.pio, run.tasks_per_node)
+
+
+def _sortable(key):
+    """A group key as something sortable: None sorts last, numbers sort as numbers."""
+    return tuple((v is None, 0 if v is None else v) for v in key)
 
 
 def group_label(key):
-    res, mode, output, pio = key
+    res, mode, output, pio, tpn = key
     parts = [res, mode or "mode unknown"]
+    if tpn:
+        parts.append(f"{tpn} ranks/node")
     if output is False:
         parts.append("no output")
     if pio not in (None, "default"):
         parts.append(f"pio {pio}")
     return " · ".join(parts)
+
+
+def group_tags(keys):
+    """Short labels that tell the group keys apart: only the fields that differ.
+
+    One key gives [""]. Used under the bars when ranks are subdivided by group.
+    """
+    def text(i, v):
+        if i == 2:
+            return {True: "output", False: "no output"}.get(v, "output unknown")
+        if i == 3:
+            return "default pio" if v in (None, "default") else f"pio {v}"
+        if i == 4:
+            return f"{v}/node" if v else "?/node"
+        return str(v) if v else "?"
+    varying = [i for i in range(len(keys[0])) if len({k[i] for k in keys}) > 1] if keys else []
+    return [" · ".join(text(i, k[i]) for i in varying) for k in keys]
 
 
 def groups(runs):

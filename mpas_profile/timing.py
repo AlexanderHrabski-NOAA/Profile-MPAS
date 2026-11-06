@@ -24,6 +24,9 @@ from datetime import datetime
 from typing import Optional
 
 LOG_NAME = "log.atmosphere.0000.out"
+# MPAS pads the rank number to the width of the rank count, so rank 0's log is
+# log.atmosphere.0000.out up to 9999 ranks and log.atmosphere.00000.out from 10000.
+LOG_RE = re.compile(r"log\.atmosphere\.0+\.out")
 
 # One row of the timer table:
 #   i2, 1x, a45 name (indented one space per level), f15.5 total, i10 calls,

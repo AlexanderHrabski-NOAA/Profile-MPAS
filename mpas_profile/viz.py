@@ -143,18 +143,77 @@ def _hbars(ax, labels, values, color, texts=None, room=1.3):
     ax.set_xlim(0, top * room)
 
 
-def _run_ticks(runs):
-    """Tick labels for one bar per run: just the rank count within a single series."""
-    one_series = len(analysis.groups(runs)) == 1
-    return [str(r.ntasks) if one_series and r.ntasks else r.label for r in runs]
+class _Layout:
+    """Where the per-run bars go.
+
+    One series: one bar per run, labeled with its rank count. Several series with distinct
+    rank counts inside each: one cluster per rank count, one bar per series in it (so
+    `||  ||  ||` is three rank counts of two series), each bar tagged with what sets its
+    series apart. Otherwise (unknown or repeated rank counts) one bar per run, labeled by
+    run name. `gidx` is each run's series number, for coloring.
+    """
+    SPAN = 0.84       # width of a cluster, as a fraction of the gap between rank counts
+
+    def __init__(self, runs):
+        by_group = analysis.groups(runs)
+        self.keys = list(by_group)
+        self.gidx = [self.keys.index(analysis.group_key(r)) for r in runs]
+        self.tags = analysis.group_tags(self.keys)
+        ranks = [r.ntasks for r in runs]
+        distinct = all(ranks) and all(len({r.ntasks for r in rs}) == len(rs)
+                                      for rs in by_group.values())
+        self.grouped = len(self.keys) > 1 and bool(distinct)
+        n = len(self.keys)
+        if self.grouped:
+            self.slots = sorted(set(ranks))
+            self.unit = self.SPAN / n
+            self.xs = [self.slots.index(r.ntasks) + (g - (n - 1) / 2) * self.unit
+                       for r, g in zip(runs, self.gidx)]
+            self.labels = [f"{r.ntasks} · {self.tags[g]}" for r, g in zip(runs, self.gidx)]
+        else:
+            self.slots = []
+            self.unit = 1.0
+            self.xs = list(range(len(runs)))
+            one = n == 1
+            self.labels = [str(r.ntasks) if one and r.ntasks else r.label for r in runs]
+        self.runs = runs
+
+    def width(self, frac):
+        """Bar width: `frac` of a slot when there is one bar per slot, else the cluster share."""
+        return self.unit * (0.92 if self.grouped else frac)
+
+    def colors(self):
+        return [_color(g) for g in self.gidx]
+
+    def legend(self, ax, **kw):
+        """A series legend for bars colored by series (none when there is only one)."""
+        if len(self.keys) < 2:
+            return
+        from matplotlib.patches import Patch
+        ax.legend(handles=[Patch(color=_color(i), label=t) for i, t in enumerate(self.tags)],
+                  ncol=len(self.keys), **kw)
 
 
-def _set_run_axis(ax, runs, xlabel="MPI ranks"):
-    labels = _run_ticks(runs)
-    ax.set_xticks(range(len(runs)), labels, rotation=0 if max(map(len, labels)) <= 6 else 35,
-                  ha="center" if max(map(len, labels)) <= 6 else "right")
-    ax.set_xlabel(xlabel if len(analysis.groups(runs)) == 1 else "run")
+def _set_run_axis(ax, lay, tags=False):
+    """Rank-count ticks. `tags` also labels every bar with its series, under the bar, for
+    charts whose colors are taken (stacked bars); colored charts use a legend instead."""
     ax.grid(axis="x", visible=False)
+    if lay.grouped:
+        n = len(lay.slots)
+        ax.set_xticks(range(n), [f"{s:g}" for s in lay.slots])
+        if tags:
+            longest = max(len(t) for t in lay.tags)
+            ax.set_xticks(lay.xs, [lay.tags[g] for g in lay.gidx], minor=True, rotation=90,
+                          va="top", ha="center", fontsize=7.5)
+            ax.tick_params(axis="x", which="minor", length=0, pad=2, colors=INK2)
+            ax.tick_params(axis="x", which="major", pad=6 + 4.6 * longest)
+        ax.set_xlim(-0.55, n - 0.45)
+        ax.set_xlabel("MPI ranks")
+        return
+    labels = lay.labels
+    short = max(map(len, labels)) <= 6
+    ax.set_xticks(lay.xs, labels, rotation=0 if short else 35, ha="center" if short else "right")
+    ax.set_xlabel("MPI ranks" if len(lay.keys) == 1 else "run")
 
 
 def _rank_axis(ax, ticks, xlabel):
@@ -339,16 +398,15 @@ def fig_scaling(plt, runs, xkey):
     return _finish(fig, f"Strong scaling: {len(runs)} runs", analysis.caveats(runs))
 
 
-def _stack(ax, runs, series, ylabel):
+def _stack(ax, lay, series, ylabel):
     """Stacked bars, one per run. `series` = [(label, color, [value per run])]."""
-    bottoms = [0.0] * len(runs)
-    xs = list(range(len(runs)))
+    bottoms = [0.0] * len(lay.runs)
     for label, color, vals in series:
         vals = [v or 0.0 for v in vals]
-        ax.bar(xs, vals, bottom=bottoms, color=color, width=0.62, label=label,
+        ax.bar(lay.xs, vals, bottom=bottoms, color=color, width=lay.width(0.62), label=label,
                edgecolor=SURFACE, linewidth=1.2)
         bottoms = [b + v for b, v in zip(bottoms, vals)]
-    _set_run_axis(ax, runs)
+    _set_run_axis(ax, lay, tags=True)
     ax.set_ylabel(ylabel)
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0))
 
@@ -356,8 +414,9 @@ def _stack(ax, runs, series, ylabel):
 def fig_breakdown(plt, runs):
     fig, (a, b) = plt.subplots(1, 2, figsize=(16.5, 6.0), gridspec_kw={"wspace": 0.62})
     fig.subplots_adjust(left=0.06, right=0.84, top=0.84, bottom=0.2)
-    _stack(a, runs, [(lab, SERIES[slot], [r.summary.get(key) for r in runs])
-                     for key, lab, slot in PHASES], "seconds")
+    lay = _Layout(runs)
+    _stack(a, lay, [(lab, SERIES[slot], [r.summary.get(key) for r in runs])
+                    for key, lab, slot in PHASES], "seconds")
     a.set_title("Wall time by phase")
 
     totals = {}
@@ -372,7 +431,7 @@ def fig_breakdown(plt, runs):
     if len(totals) > len(top):
         series.append(("other", OTHER,
                        [sum(v for n, v in c.items() if n not in top) for c in per_run]))
-    _stack(b, runs, series, "core-seconds (time × ranks)")
+    _stack(b, lay, series, "core-seconds (time × ranks)")
     b.set_title("Time-integration components in core-seconds\n(flat bars = perfect scaling)")
     return _finish(fig, "Where the time goes, run by run", analysis.caveats(runs))
 
@@ -397,11 +456,14 @@ def _imbalance_matrix(runs, limit=12):
 
 
 def fig_quality(plt, runs):
-    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.colors import LinearSegmentedColormap, to_rgba
     fig, axes = plt.subplots(2, 2, figsize=(13.0, 8.6), gridspec_kw={"hspace": 0.5, "wspace": 0.25})
     fig.subplots_adjust(left=0.17, right=0.97, top=0.9, bottom=0.14)
     (a_imb, a_step), (a_thr, a_cost) = axes
-    xs = list(range(len(runs)))
+    lay = _Layout(runs)
+    xs = lay.xs
+    cols = lay.colors()
+    imb_x = list(range(len(runs)))      # heatmap columns are always one per run
 
     names, data = _imbalance_matrix(runs)
     if names:
@@ -409,7 +471,9 @@ def fig_quality(plt, runs):
         vmax = max(0.5, max((v for row in data for v in row if v == v), default=0.5))
         im = a_imb.imshow(data, aspect="auto", cmap=cmap, vmin=0, vmax=vmax)
         a_imb.set_yticks(range(len(names)), names)
-        a_imb.set_xticks(xs, _run_ticks(runs), rotation=0 if len(runs) < 9 else 35)
+        flat = len(runs) < 9 and not lay.grouped
+        a_imb.set_xticks(imb_x, lay.labels, rotation=0 if flat else 35,
+                         ha="center" if flat else "right", fontsize=8)
         a_imb.grid(False)
         if len(names) * len(runs) <= 70:
             for i, row in enumerate(data):
@@ -426,24 +490,29 @@ def fig_quality(plt, runs):
 
     data = [r.log.step_times[1:] for r in runs]
     if any(data):
-        bp = a_step.boxplot([d or [math.nan] for d in data], positions=xs, widths=0.5,
-                            patch_artist=True, showfliers=True,
-                            flierprops={"marker": "o", "markersize": 3, "markerfacecolor": SERIES[1],
-                                        "markeredgecolor": SERIES[1]},
-                            medianprops={"color": INK, "linewidth": 1.4},
-                            whiskerprops={"color": SERIES[0]}, capprops={"color": SERIES[0]})
-        for box in bp["boxes"]:
-            box.set(facecolor="#cde2fb", edgecolor=SERIES[0], linewidth=1.2)
-    _set_run_axis(a_step, runs)
+        bp = a_step.boxplot([d or [math.nan] for d in data], positions=xs,
+                            widths=lay.width(0.5), patch_artist=True, showfliers=True,
+                            medianprops={"color": INK, "linewidth": 1.4})
+        for i, c in enumerate(cols):
+            bp["boxes"][i].set(facecolor=to_rgba(c, 0.22), edgecolor=c, linewidth=1.2)
+            for part in ("whiskers", "caps"):
+                for line in bp[part][2 * i:2 * i + 2]:
+                    line.set_color(c)
+            bp["fliers"][i].set(marker="o", markersize=3, markerfacecolor=c, markeredgecolor=c)
+    _set_run_axis(a_step, lay)
+    lay.legend(a_step, loc="upper right")
     a_step.set_ylabel("seconds per step")
     a_step.set_title("Step wall time (first step excluded); dots = spike steps")
 
     sdd = [r.summary["sim_days_per_day"] for r in runs]
-    a_thr.bar(xs, [v or 0 for v in sdd], color=SERIES[0], width=0.6)
+    a_thr.bar(xs, [v or 0 for v in sdd], color=cols, width=lay.width(0.6))
     for x, v in zip(xs, sdd):
         if v and len(runs) <= 10:
             a_thr.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color=INK2)
-    _set_run_axis(a_thr, runs)
+    _set_run_axis(a_thr, lay)
+    lay.legend(a_thr, loc="upper left")
+    if lay.grouped:
+        a_thr.set_ylim(0, max([v or 0 for v in sdd] + [0]) * 1.22)
     a_thr.set_ylabel("simulated days per day")
     a_thr.set_title("Throughput")
 
@@ -453,11 +522,11 @@ def fig_quality(plt, runs):
     else:
         vals = [r.summary["core_s_per_cell_step"] for r in runs]
         ylabel, title = "core-seconds per cell per step", "Cost (nodes unknown, so per cell-step)"
-    a_cost.bar(xs, [v or 0 for v in vals], color=SERIES[0], width=0.6)
+    a_cost.bar(xs, [v or 0 for v in vals], color=cols, width=lay.width(0.6))
     for x, v in zip(xs, vals):
         if v and len(runs) <= 10:
             a_cost.text(x, v * 1.01, f"{v:.3g}", ha="center", va="bottom", fontsize=8, color=INK2)
-    _set_run_axis(a_cost, runs)
+    _set_run_axis(a_cost, lay)
     a_cost.set_ylabel(ylabel)
     a_cost.set_title(title)
     return _finish(fig, "Quality of the runs: balance, steadiness, throughput, cost",
