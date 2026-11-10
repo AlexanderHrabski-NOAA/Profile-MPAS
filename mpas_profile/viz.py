@@ -448,11 +448,13 @@ def _series_style(i):
     return SERIES[i % len(SERIES)], HATCHES[(i // len(SERIES)) % len(HATCHES)]
 
 
-def _parent_shares(runs, parent, scales):
-    """Per run, the shares of wall time for each direct child timer of `parent`.
+def _parent_shares(runs, parent, scales, of_parent=False):
+    """Per run, the shares for each direct child timer of `parent`.
 
-    The parent's own time (what none of its children account for) goes under INNER, and the
-    rest of the run under REST. Appends each run's scale (see _shares) to `scales`.
+    Shares are of the run's wall time, or of the parent's own time when `of_parent`. The
+    parent's own time (what none of its children account for) goes under INNER, and, for
+    shares of wall time, the rest of the run under REST. Appends each run's scale (see
+    _shares) to `scales`.
     """
     out = []
     for r in runs:
@@ -460,15 +462,16 @@ def _parent_shares(runs, parent, scales):
         children = {n: t for n, t, _, _ in analysis.components(r, parent)}
         children[INNER] = (total.total if total else 0.0) - sum(
             v for v in children.values() if v == v)
-        shares, scale = _shares(r.summary["wall_s"], children)
+        shares, scale = _shares(total.total if total and of_parent else
+                                (None if of_parent else r.summary["wall_s"]), children)
         out.append(shares)
         scales.append(scale)
     return out
 
 
-def _component_series(shares, parent):
+def _component_series(shares, parent, outside=True):
     """Stack series for `_stack`: every child of `parent`, largest first, then the parent's
-    own remaining time, then the rest of the run."""
+    own remaining time, then (unless `outside` is False) the rest of the run."""
     totals = {}
     for c in shares:
         for n, v in c.items():
@@ -480,7 +483,8 @@ def _component_series(shares, parent):
         color, hatch = _series_style(i)
         series.append((n, color, [c.get(n) for c in shares], hatch))
     series.append((f"{parent} (own time)", OTHER, [c.get(INNER) for c in shares]))
-    series.append((f"outside {parent}", REST_COLOR, [c.get(REST) for c in shares]))
+    if outside:
+        series.append((f"outside {parent}", REST_COLOR, [c.get(REST) for c in shares]))
     return series, bool(names)
 
 
@@ -502,11 +506,14 @@ def fig_breakdown(plt, runs, xkey="ranks"):
     a.set_ylim(0, 100)
     a.set_title("Wall time by phase\n(% of total run time)")
 
-    for ax, parent in ((b, "time integration"), (c, "physics driver")):
-        series, found = _component_series(_parent_shares(runs, parent, scales), parent)
-        _stack(ax, lay, series, "% of total run time")
+    # Time integration is shown against the whole run; the physics driver against itself.
+    for ax, parent, of_parent in ((b, "time integration", False), (c, "physics driver", True)):
+        whole = f"{parent} time" if of_parent else "total run time"
+        series, found = _component_series(_parent_shares(runs, parent, scales, of_parent),
+                                          parent, outside=not of_parent)
+        _stack(ax, lay, series, f"% of {whole}")
         ax.set_ylim(0, 100)
-        ax.set_title(f"{parent}: components\n(% of total run time)")
+        ax.set_title(f"{parent}: components\n(% of {whole})")
         if not found:
             ax.text(0.5, 0.5, f"no {parent} timers in these logs", ha="center", va="center",
                     transform=ax.transAxes, color=INK2)
@@ -514,7 +521,8 @@ def fig_breakdown(plt, runs, xkey="ranks"):
     notes = list(analysis.caveats(runs))
     if max(scales) > 1.005:
         notes.append("Some bars were scaled down to 100%: timer maxima over ranks add up to "
-                     f"as much as {100 * (max(scales) - 1):.1f}% more than the run's total time.")
+                     f"as much as {100 * (max(scales) - 1):.1f}% more than the whole they "
+                     "are a share of.")
     return _finish(fig, "Where the time goes, run by run", notes)
 
 

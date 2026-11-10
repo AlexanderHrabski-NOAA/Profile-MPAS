@@ -229,11 +229,12 @@ def test_breakdown_bars_each_add_to_100_percent(study):
     fig = viz.build_figures(plt, runs)["breakdown"]
     assert len(fig.axes) == 3
     for ax in fig.axes:
-        assert ax.get_ylabel() == "% of total run time"
         assert _stack_totals(ax, len(runs)) == pytest.approx([100.0] * len(runs))
+    assert [ax.get_ylabel() for ax in fig.axes] == ["% of total run time"] * 2 + [
+        "% of physics driver time"]
     legend = lambda ax: [t.get_text() for t in ax.get_legend().get_texts()]   # noqa: E731
     assert legend(fig.axes[1])[-1] == "outside time integration"
-    assert legend(fig.axes[2])[-1] == "outside physics driver"
+    assert legend(fig.axes[2])[-1] == "physics driver (own time)"     # no "outside" slice
 
 
 def test_breakdown_shows_every_component_and_physics_scheme(tmp_path):
@@ -250,7 +251,7 @@ def test_breakdown_shows_every_component_and_physics_scheme(tmp_path):
     physics = [c.name for c in log.children("physics driver")]
     assert len(integ) > 8 and len(physics) >= 8              # more than the palette has colors
     assert sorted(legend(fig.axes[1])[:-2]) == sorted(integ)
-    assert sorted(legend(fig.axes[2])[:-2]) == sorted(physics)
+    assert sorted(legend(fig.axes[2])[:-1]) == sorted(physics)
     # slices beyond the palette are told apart by a hatch pattern
     hatches = {p.get_hatch() for p in fig.axes[1].patches}
     assert None in hatches and len(hatches) > 1
