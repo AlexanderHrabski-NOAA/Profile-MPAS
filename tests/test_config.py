@@ -133,6 +133,13 @@ def test_io_defaults_keep_names():
     assert e.name == "60km_pinned_prof_n2x96"
 
 
+def test_iotasks_per_node_zero_means_all_ranks():
+    e = config.build_experiment({"resolution": "60km", "nodes": 2, "tasks_per_node": 96,
+                                 "pio": {"iotasks_per_node": 0}}, "t")
+    assert (e.pio_num_iotasks, e.pio_stride, e.pio_iotasks_per_node) == (0, 1, None)
+    assert e.name == "60km_pinned_prof_n2x96"
+
+
 def test_iotasks_per_node_derives_stride():
     e = config.build_experiment({"resolution": "60km", "nodes": 4, "tasks_per_node": 96,
                                  "pio": {"iotasks_per_node": 2}}, "t")
@@ -163,7 +170,7 @@ def test_io_names_and_sweep(tmp_path):
     ({"pio": {"num_iotasks": 500}}, "exceeds the rank count"),
     ({"pio": {"num_iotasks": 8, "stride": 20}}, "exceeds the rank count"),
     ({"pio": {"stride": 0}}, "'stride'"),
-    ({"pio": {"iotasks_per_node": 0}}, "iotasks_per_node"),
+    ({"pio": {"iotasks_per_node": -1}}, "iotasks_per_node"),
     ({"pio": {"iotasks_per_node": 97}}, "exceeds the 96 ranks per node"),
     ({"pio": {"iotasks_per_node": 2, "stride": 4}}, "cannot be combined"),
     ({"pio": {"iotasks_per_node": 2, "num_iotasks": 4}}, "cannot be combined"),

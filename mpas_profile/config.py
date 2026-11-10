@@ -168,7 +168,12 @@ def resolve_pio(pio, nodes, ntasks, tpn, where):
         if "num_iotasks" in pio or "stride" in pio:
             raise SetupError(f"{where}: pio.iotasks_per_node cannot be combined with "
                              "pio.num_iotasks or pio.stride.")
-        k = _positive_int(pio, "iotasks_per_node", where)
+        if isinstance(per_node, bool) or not isinstance(per_node, int) or per_node < 0:
+            raise SetupError(f"{where}: pio.iotasks_per_node must be a non-negative integer "
+                             f"(got {per_node!r}).")
+        if per_node == 0:   # every rank does I/O: the MPAS default, same as no pio settings
+            return 0, 1, None, io_type
+        k = per_node
         if tpn is None:
             if ntasks % nodes:
                 raise SetupError(f"{where}: pio.iotasks_per_node needs an even rank count "

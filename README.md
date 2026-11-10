@@ -130,7 +130,7 @@ An entry can have both. The zipped pairs are then crossed with the `sweep`, so a
 | `output` | `true` | `false` turns off all model output: restart, history, and diagnostics get `output_interval="none"`. Input streams are untouched. |
 | `pio.num_iotasks` | `0` | `config_pio_num_iotasks`: how many ranks do file I/O. `0` means every rank does. |
 | `pio.stride` | `1` | `config_pio_stride`: rank spacing between I/O ranks. Needs `num_iotasks * stride <= ranks`. |
-| `pio.iotasks_per_node` | | Instead of the two above: put this many I/O ranks on every node. Sets `num_iotasks = nodes * k` and `stride = ranks_per_node // k`, so with 96 ranks per node `iotasks_per_node: 2` gives stride 48. Cannot be combined with `num_iotasks` or `stride`. With `ntasks`, it must divide evenly across nodes. |
+| `pio.iotasks_per_node` | | Instead of the two above: put this many I/O ranks on every node. Sets `num_iotasks = nodes * k` and `stride = ranks_per_node // k`, so with 96 ranks per node `iotasks_per_node: 2` gives stride 48. `0` means every rank does I/O (same as the defaults above), which is handy as the baseline in a sweep. Cannot be combined with `num_iotasks` or `stride`. With `ntasks`, it must divide evenly across nodes. |
 | `pio.io_type` | MPAS default (`pnetcdf`) | One of `pnetcdf`, `pnetcdf,cdf5`, `netcdf`, `netcdf4`. Written as the `io_type` attribute on the restart, history, and diagnostics streams only; PIO must have been built with support for it. |
 | `name` | generated | Experiment directory name. |
 
