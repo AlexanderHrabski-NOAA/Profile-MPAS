@@ -405,12 +405,12 @@ def fig_scaling(plt, runs, xkey):
 
 
 def _stack(ax, lay, series, ylabel):
-    """Stacked bars, one per run. `series` = [(label, color, [value per run])]."""
+    """Stacked bars, one per run. `series` = [(label, color, [value per run], hatch?)]."""
     bottoms = [0.0] * len(lay.runs)
-    for label, color, vals in series:
+    for label, color, vals, *hatch in series:
         vals = [v or 0.0 for v in vals]
         ax.bar(lay.xs, vals, bottom=bottoms, color=color, width=lay.width(0.62), label=label,
-               edgecolor=SURFACE, linewidth=1.2)
+               edgecolor=SURFACE, linewidth=1.2, hatch=hatch[0] if hatch else None)
         bottoms = [b + v for b, v in zip(bottoms, vals)]
     _set_run_axis(ax, lay, tags=True)
     ax.set_ylabel(ylabel)
@@ -419,7 +419,6 @@ def _stack(ax, lay, series, ylabel):
 
 REST = "\0rest"          # key for the part of a run that the named parts do not cover
 INNER = "\0inner"        # key for time integration's own time, outside its child timers
-OUTSIDE = "outside time integration"
 REST_COLOR = "#d2d1cc"
 
 
@@ -441,47 +440,76 @@ def _shares(wall, parts):
     return shares, total / wall
 
 
+HATCHES = [None, "//", "xx", "\\\\"]     # after the palette runs out, reuse colors with a pattern
+
+
+def _series_style(i):
+    """(color, hatch) of the i-th named component: palette first, then patterned repeats."""
+    return SERIES[i % len(SERIES)], HATCHES[(i // len(SERIES)) % len(HATCHES)]
+
+
+def _parent_shares(runs, parent, scales):
+    """Per run, the shares of wall time for each direct child timer of `parent`.
+
+    The parent's own time (what none of its children account for) goes under INNER, and the
+    rest of the run under REST. Appends each run's scale (see _shares) to `scales`.
+    """
+    out = []
+    for r in runs:
+        total = r.log.timer(parent)
+        children = {n: t for n, t, _, _ in analysis.components(r, parent)}
+        children[INNER] = (total.total if total else 0.0) - sum(
+            v for v in children.values() if v == v)
+        shares, scale = _shares(r.summary["wall_s"], children)
+        out.append(shares)
+        scales.append(scale)
+    return out
+
+
+def _component_series(shares, parent):
+    """Stack series for `_stack`: every child of `parent`, largest first, then the parent's
+    own remaining time, then the rest of the run."""
+    totals = {}
+    for c in shares:
+        for n, v in c.items():
+            if n not in (REST, INNER):
+                totals[n] = totals.get(n, 0.0) + v
+    names = sorted(totals, key=lambda n: -totals[n])
+    series = []
+    for i, n in enumerate(names):
+        color, hatch = _series_style(i)
+        series.append((n, color, [c.get(n) for c in shares], hatch))
+    series.append((f"{parent} (own time)", OTHER, [c.get(INNER) for c in shares]))
+    series.append((f"outside {parent}", REST_COLOR, [c.get(REST) for c in shares]))
+    return series, bool(names)
+
+
 def fig_breakdown(plt, runs, xkey="ranks"):
-    fig, (a, b) = plt.subplots(1, 2, figsize=(16.5, 6.0), gridspec_kw={"wspace": 0.62})
-    fig.subplots_adjust(left=0.06, right=0.84, top=0.84, bottom=0.2)
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(25.0, 6.6), gridspec_kw={"wspace": 0.85})
+    fig.subplots_adjust(left=0.04, right=0.91, top=0.84, bottom=0.2)
     lay = _Layout(runs, xkey)
     scales = []
 
-    phases, comps = [], []
+    phases = []
     for r in runs:
-        wall = r.summary["wall_s"]
-        shares, scale = _shares(wall, {key: r.summary.get(key) for key, _, _ in PHASES})
+        shares, scale = _shares(r.summary["wall_s"],
+                                {key: r.summary.get(key) for key, _, _ in PHASES})
         phases.append(shares)
         scales.append(scale)
-        children = {n: t for n, t, _, _ in analysis.components(r, "time integration")}
-        # Time inside time integration that no child timer accounts for (negative when the
-        # children's maxima over ranks overshoot; _shares ignores that).
-        children[INNER] = (r.summary["integration_s"] or 0.0) - sum(
-            v for v in children.values() if v == v)
-        shares, scale = _shares(wall, children)
-        comps.append(shares)
-        scales.append(scale)
-
     series = [(lab, SERIES[slot], [p.get(key) for p in phases]) for key, lab, slot in PHASES]
     series.append(("other / untimed", REST_COLOR, [p.get(REST) for p in phases]))
     _stack(a, lay, series, "% of total run time")
     a.set_ylim(0, 100)
     a.set_title("Wall time by phase\n(% of total run time)")
 
-    totals = {}
-    for c in comps:
-        for n, v in c.items():
-            if n not in (REST, INNER):
-                totals[n] = totals.get(n, 0.0) + v
-    top = sorted(totals, key=lambda n: -totals[n])[:6]
-    series = [(n, SERIES[i], [c.get(n) for c in comps]) for i, n in enumerate(top)]
-    series.append(("other in time integration", OTHER,
-                   [sum(v for n, v in c.items() if n not in top and n != REST)
-                    for c in comps]))
-    series.append((OUTSIDE, REST_COLOR, [c.get(REST) for c in comps]))
-    _stack(b, lay, series, "% of total run time")
-    b.set_ylim(0, 100)
-    b.set_title("Time-integration components\n(% of total run time)")
+    for ax, parent in ((b, "time integration"), (c, "physics driver")):
+        series, found = _component_series(_parent_shares(runs, parent, scales), parent)
+        _stack(ax, lay, series, "% of total run time")
+        ax.set_ylim(0, 100)
+        ax.set_title(f"{parent}: components\n(% of total run time)")
+        if not found:
+            ax.text(0.5, 0.5, f"no {parent} timers in these logs", ha="center", va="center",
+                    transform=ax.transAxes, color=INK2)
 
     notes = list(analysis.caveats(runs))
     if max(scales) > 1.005:

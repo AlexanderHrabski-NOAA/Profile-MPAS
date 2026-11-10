@@ -227,11 +227,35 @@ def test_breakdown_bars_each_add_to_100_percent(study):
     import matplotlib.pyplot as plt
     runs = analysis.load_runs([study])
     fig = viz.build_figures(plt, runs)["breakdown"]
-    for ax in fig.axes[:2]:
+    assert len(fig.axes) == 3
+    for ax in fig.axes:
         assert ax.get_ylabel() == "% of total run time"
         assert _stack_totals(ax, len(runs)) == pytest.approx([100.0] * len(runs))
-    labels = [t.get_text() for t in fig.axes[1].get_legend().get_texts()]
-    assert labels[-1] == "outside time integration"
+    legend = lambda ax: [t.get_text() for t in ax.get_legend().get_texts()]   # noqa: E731
+    assert legend(fig.axes[1])[-1] == "outside time integration"
+    assert legend(fig.axes[2])[-1] == "outside physics driver"
+
+
+def test_breakdown_shows_every_component_and_physics_scheme(tmp_path):
+    root = tmp_path / "real"
+    for name in ("a", "b"):
+        (root / name).mkdir(parents=True)
+        (root / name / "log.atmosphere.0000.out").write_text(SAMPLE.read_text())
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([root])
+    fig = viz.build_figures(plt, runs)["breakdown"]
+    legend = lambda ax: [t.get_text() for t in ax.get_legend().get_texts()]   # noqa: E731
+    log = runs[0].log
+    integ = [c.name for c in log.children("time integration")]
+    physics = [c.name for c in log.children("physics driver")]
+    assert len(integ) > 8 and len(physics) >= 8              # more than the palette has colors
+    assert sorted(legend(fig.axes[1])[:-2]) == sorted(integ)
+    assert sorted(legend(fig.axes[2])[:-2]) == sorted(physics)
+    # slices beyond the palette are told apart by a hatch pattern
+    hatches = {p.get_hatch() for p in fig.axes[1].patches}
+    assert None in hatches and len(hatches) > 1
+    for ax in fig.axes[1:]:
+        assert _stack_totals(ax, len(runs)) == pytest.approx([100.0] * len(runs))
 
 
 def test_shares_cover_the_whole_run():
