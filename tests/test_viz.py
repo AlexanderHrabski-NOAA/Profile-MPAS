@@ -188,3 +188,57 @@ def test_summary_table_lists_runs_and_notes(study, capsys):
     text = capsys.readouterr().out
     assert "60km_native_n4x96" in text and "sim d/d" in text
     assert "note:" not in text                            # all complete, all native
+
+
+def test_x_nodes_clusters_bars_by_node_count(tmp_path):
+    root = tmp_path / "tpn"
+    for n in (16, 22, 32):
+        for tpn in (96, 192):
+            logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    runs = analysis.load_runs([root])
+    by_ranks = viz._Layout(runs)
+    by_nodes = viz._Layout(runs, "nodes")
+    assert by_ranks.slots == [1536, 2112, 3072, 4224, 6144]       # 16x192 and 32x96 share 3072
+    assert by_nodes.grouped and by_nodes.slots == [16, 22, 32]
+    assert by_nodes.xlabel == "nodes" and by_ranks.xlabel == "MPI ranks"
+    assert len(by_nodes.slots) == 3 and len({round(x) for x in by_nodes.xs}) == 3
+    import matplotlib.pyplot as plt
+    figs = viz.build_figures(plt, runs, "nodes")
+    for name, ax_index in (("breakdown", 0), ("breakdown", 1), ("quality", 1), ("quality", 2),
+                           ("quality", 3)):
+        ax = figs[name].axes[ax_index]
+        assert [t.get_text() for t in ax.get_xticklabels()] == ["16", "22", "32"], (name, ax_index)
+        assert ax.get_xlabel() == "nodes"
+
+
+def test_x_nodes_labels_single_series_by_node_count(study):
+    runs = analysis.load_runs([study])
+    assert viz._Layout(runs, "nodes").labels == ["1", "2", "4"]
+    assert viz._Layout(runs).labels == ["96", "192", "384"]
+
+
+def test_component_chart_is_percent_of_total_run_time(study):
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([study])
+    ax = viz.build_figures(plt, runs)["breakdown"].axes[1]
+    assert ax.get_ylabel() == "% of total run time"
+    expected = []
+    for r in runs:
+        wall = r.summary["wall_s"]
+        expected.append(sum(100 * t / wall for _, t, _, _ in
+                            analysis.components(r, "time integration") if t == t and t))
+    stacked = [sum(p.get_height() for p in ax.patches if p.get_x() + p.get_width() / 2 == x)
+               for x in range(len(runs))]
+    assert stacked == pytest.approx(expected, rel=1e-6)
+    assert all(0 < v < 100 for v in stacked)
+
+
+def test_imbalance_heatmap_columns_follow_the_bar_clusters(tmp_path):
+    root = tmp_path / "tpn"
+    for n in (16, 32):
+        for tpn in (96, 192):
+            logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    import matplotlib.pyplot as plt
+    figs = viz.build_figures(plt, analysis.load_runs([root]), "nodes")
+    labels = [t.get_text() for t in figs["quality"].axes[0].get_xticklabels()]
+    assert labels == ["16 · 96/node", "16 · 192/node", "32 · 96/node", "32 · 192/node"]

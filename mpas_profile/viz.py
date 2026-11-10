@@ -146,37 +146,43 @@ def _hbars(ax, labels, values, color, texts=None, room=1.3):
 class _Layout:
     """Where the per-run bars go.
 
-    One series: one bar per run, labeled with its rank count. Several series with distinct
-    rank counts inside each: one cluster per rank count, one bar per series in it (so
-    `||  ||  ||` is three rank counts of two series), each bar tagged with what sets its
-    series apart. Otherwise (unknown or repeated rank counts) one bar per run, labeled by
-    run name. `gidx` is each run's series number, for coloring.
+    One series: one bar per run, labeled with its size (rank or node count, per `xkey`).
+    Several series with distinct sizes inside each: one cluster per size, one bar per
+    series in it (so `||  ||  ||` is three sizes of two series), each bar tagged with what
+    sets its series apart. Otherwise (unknown or repeated sizes) one bar per run, labeled
+    by run name. `gidx` is each run's series number, for coloring.
     """
-    SPAN = 0.84       # width of a cluster, as a fraction of the gap between rank counts
+    SPAN = 0.84       # width of a cluster, as a fraction of the gap between sizes
 
-    def __init__(self, runs):
+    def __init__(self, runs, xkey="ranks"):
         by_group = analysis.groups(runs)
         self.keys = list(by_group)
         self.gidx = [self.keys.index(analysis.group_key(r)) for r in runs]
         self.tags = analysis.group_tags(self.keys)
-        ranks = [r.ntasks for r in runs]
-        distinct = all(ranks) and all(len({r.ntasks for r in rs}) == len(rs)
+        self.xkey = xkey
+        size = (lambda r: r.nodes) if xkey == "nodes" else (lambda r: r.ntasks)
+        sizes = [size(r) for r in runs]
+        distinct = all(sizes) and all(len({size(r) for r in rs}) == len(rs)
                                       for rs in by_group.values())
         self.grouped = len(self.keys) > 1 and bool(distinct)
         n = len(self.keys)
         if self.grouped:
-            self.slots = sorted(set(ranks))
+            self.slots = sorted(set(sizes))
             self.unit = self.SPAN / n
-            self.xs = [self.slots.index(r.ntasks) + (g - (n - 1) / 2) * self.unit
+            self.xs = [self.slots.index(size(r)) + (g - (n - 1) / 2) * self.unit
                        for r, g in zip(runs, self.gidx)]
-            self.labels = [f"{r.ntasks} · {self.tags[g]}" for r, g in zip(runs, self.gidx)]
+            self.labels = [f"{size(r)} · {self.tags[g]}" for r, g in zip(runs, self.gidx)]
         else:
             self.slots = []
             self.unit = 1.0
             self.xs = list(range(len(runs)))
             one = n == 1
-            self.labels = [str(r.ntasks) if one and r.ntasks else r.label for r in runs]
+            self.labels = [str(size(r)) if one and size(r) else r.label for r in runs]
         self.runs = runs
+
+    @property
+    def xlabel(self):
+        return "nodes" if self.xkey == "nodes" else "MPI ranks"
 
     def width(self, frac):
         """Bar width: `frac` of a slot when there is one bar per slot, else the cluster share."""
@@ -195,7 +201,7 @@ class _Layout:
 
 
 def _set_run_axis(ax, lay, tags=False):
-    """Rank-count ticks. `tags` also labels every bar with its series, under the bar, for
+    """Rank- or node-count ticks, per the layout's `xkey`. `tags` also labels every bar with its series, under the bar, for
     charts whose colors are taken (stacked bars); colored charts use a legend instead."""
     ax.grid(axis="x", visible=False)
     if lay.grouped:
@@ -208,12 +214,12 @@ def _set_run_axis(ax, lay, tags=False):
             ax.tick_params(axis="x", which="minor", length=0, pad=2, colors=INK2)
             ax.tick_params(axis="x", which="major", pad=6 + 4.6 * longest)
         ax.set_xlim(-0.55, n - 0.45)
-        ax.set_xlabel("MPI ranks")
+        ax.set_xlabel(lay.xlabel)
         return
     labels = lay.labels
     short = max(map(len, labels)) <= 6
     ax.set_xticks(lay.xs, labels, rotation=0 if short else 35, ha="center" if short else "right")
-    ax.set_xlabel("MPI ranks" if len(lay.keys) == 1 else "run")
+    ax.set_xlabel(lay.xlabel if len(lay.keys) == 1 else "run")
 
 
 def _rank_axis(ax, ticks, xlabel):
@@ -411,10 +417,10 @@ def _stack(ax, lay, series, ylabel):
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0))
 
 
-def fig_breakdown(plt, runs):
+def fig_breakdown(plt, runs, xkey="ranks"):
     fig, (a, b) = plt.subplots(1, 2, figsize=(16.5, 6.0), gridspec_kw={"wspace": 0.62})
     fig.subplots_adjust(left=0.06, right=0.84, top=0.84, bottom=0.2)
-    lay = _Layout(runs)
+    lay = _Layout(runs, xkey)
     _stack(a, lay, [(lab, SERIES[slot], [r.summary.get(key) for r in runs])
                     for key, lab, slot in PHASES], "seconds")
     a.set_title("Wall time by phase")
@@ -422,7 +428,9 @@ def fig_breakdown(plt, runs):
     totals = {}
     per_run = []
     for r in runs:
-        comp = {n: c for n, _, _, c in analysis.components(r, "time integration") if c}
+        wall = r.summary["wall_s"]
+        comp = ({n: 100 * t / wall for n, t, _, _ in analysis.components(r, "time integration")
+                 if t == t and t} if wall else {})
         per_run.append(comp)
         for n, c in comp.items():
             totals[n] = totals.get(n, 0.0) + c
@@ -431,8 +439,8 @@ def fig_breakdown(plt, runs):
     if len(totals) > len(top):
         series.append(("other", OTHER,
                        [sum(v for n, v in c.items() if n not in top) for c in per_run]))
-    _stack(b, lay, series, "core-seconds (time × ranks)")
-    b.set_title("Time-integration components in core-seconds\n(flat bars = perfect scaling)")
+    _stack(b, lay, series, "% of total run time")
+    b.set_title("Time-integration components\n(% of total run time; the rest is outside time integration)")
     return _finish(fig, "Where the time goes, run by run", analysis.caveats(runs))
 
 
@@ -455,24 +463,26 @@ def _imbalance_matrix(runs, limit=12):
     return names, data
 
 
-def fig_quality(plt, runs):
+def fig_quality(plt, runs, xkey="ranks"):
     from matplotlib.colors import LinearSegmentedColormap, to_rgba
     fig, axes = plt.subplots(2, 2, figsize=(13.0, 8.6), gridspec_kw={"hspace": 0.5, "wspace": 0.25})
     fig.subplots_adjust(left=0.17, right=0.97, top=0.9, bottom=0.14)
     (a_imb, a_step), (a_thr, a_cost) = axes
-    lay = _Layout(runs)
+    lay = _Layout(runs, xkey)
     xs = lay.xs
     cols = lay.colors()
     imb_x = list(range(len(runs)))      # heatmap columns are always one per run
+    # Columns follow the bars' order (by size, then series) so clusters line up across panels.
+    order = sorted(imb_x, key=lambda i: xs[i]) if lay.grouped else imb_x
 
-    names, data = _imbalance_matrix(runs)
+    names, data = _imbalance_matrix([runs[i] for i in order])
     if names:
         cmap = LinearSegmentedColormap.from_list("blue", SEQUENTIAL)
         vmax = max(0.5, max((v for row in data for v in row if v == v), default=0.5))
         im = a_imb.imshow(data, aspect="auto", cmap=cmap, vmin=0, vmax=vmax)
         a_imb.set_yticks(range(len(names)), names)
         flat = len(runs) < 9 and not lay.grouped
-        a_imb.set_xticks(imb_x, lay.labels, rotation=0 if flat else 35,
+        a_imb.set_xticks(imb_x, [lay.labels[i] for i in order], rotation=0 if flat else 35,
                          ha="center" if flat else "right", fontsize=8)
         a_imb.grid(False)
         if len(names) * len(runs) <= 70:
@@ -541,8 +551,8 @@ def build_figures(plt, runs, xkey="ranks"):
     figs = {}
     if analysis.is_scaling_study(runs):
         figs["scaling"] = fig_scaling(plt, runs, xkey)
-    figs["breakdown"] = fig_breakdown(plt, runs)
-    figs["quality"] = fig_quality(plt, runs)
+    figs["breakdown"] = fig_breakdown(plt, runs, xkey)
+    figs["quality"] = fig_quality(plt, runs, xkey)
     return figs
 
 
