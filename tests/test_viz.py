@@ -217,20 +217,31 @@ def test_x_nodes_labels_single_series_by_node_count(study):
     assert viz._Layout(runs).labels == ["96", "192", "384"]
 
 
-def test_component_chart_is_percent_of_total_run_time(study):
+def _stack_totals(ax, n):
+    """Height of each of the n stacked bars (bar i is centered on x = i)."""
+    return [sum(p.get_height() for p in ax.patches if round(p.get_x() + p.get_width() / 2) == i)
+            for i in range(n)]
+
+
+def test_breakdown_bars_each_add_to_100_percent(study):
     import matplotlib.pyplot as plt
     runs = analysis.load_runs([study])
-    ax = viz.build_figures(plt, runs)["breakdown"].axes[1]
-    assert ax.get_ylabel() == "% of total run time"
-    expected = []
-    for r in runs:
-        wall = r.summary["wall_s"]
-        expected.append(sum(100 * t / wall for _, t, _, _ in
-                            analysis.components(r, "time integration") if t == t and t))
-    stacked = [sum(p.get_height() for p in ax.patches if p.get_x() + p.get_width() / 2 == x)
-               for x in range(len(runs))]
-    assert stacked == pytest.approx(expected, rel=1e-6)
-    assert all(0 < v < 100 for v in stacked)
+    fig = viz.build_figures(plt, runs)["breakdown"]
+    for ax in fig.axes[:2]:
+        assert ax.get_ylabel() == "% of total run time"
+        assert _stack_totals(ax, len(runs)) == pytest.approx([100.0] * len(runs))
+    labels = [t.get_text() for t in fig.axes[1].get_legend().get_texts()]
+    assert labels[-1] == "outside time integration"
+
+
+def test_shares_cover_the_whole_run():
+    shares, scale = viz._shares(100.0, {"a": 30.0, "b": 20.0, "none": None})
+    assert scale == 1.0 and shares == {"a": 30.0, "b": 20.0, viz.REST: 50.0}
+    # parts that overshoot the whole (maxima over ranks) are scaled down to still sum to 100
+    shares, scale = viz._shares(100.0, {"a": 70.0, "b": 40.0, "neg": -5.0})
+    assert scale == pytest.approx(1.1) and sum(shares.values()) == pytest.approx(100.0)
+    assert shares[viz.REST] == 0.0 and "neg" not in shares
+    assert viz._shares(None, {"a": 1.0}) == ({}, 1.0)
 
 
 def test_imbalance_heatmap_columns_follow_the_bar_clusters(tmp_path):

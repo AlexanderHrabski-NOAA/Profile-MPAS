@@ -417,31 +417,77 @@ def _stack(ax, lay, series, ylabel):
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0))
 
 
+REST = "\0rest"          # key for the part of a run that the named parts do not cover
+INNER = "\0inner"        # key for time integration's own time, outside its child timers
+OUTSIDE = "outside time integration"
+REST_COLOR = "#d2d1cc"
+
+
+def _shares(wall, parts):
+    """Each part's percent of a run's wall time, with the uncovered remainder under REST.
+
+    `parts` is {name: seconds}. The shares sum to exactly 100: timers are maxima over
+    ranks, so parts can add up to slightly more than the whole, in which case everything is
+    scaled down together. Returns (shares, scale) where scale is parts / wall before
+    scaling (1.0 when they fit), or ({}, 1.0) when the wall time is unknown.
+    """
+    if not wall:
+        return {}, 1.0
+    parts = {n: v for n, v in parts.items() if v and v == v and v > 0}
+    rest = max(wall - sum(parts.values()), 0.0)
+    total = sum(parts.values()) + rest
+    shares = {n: 100 * v / total for n, v in parts.items()}
+    shares[REST] = 100 * rest / total
+    return shares, total / wall
+
+
 def fig_breakdown(plt, runs, xkey="ranks"):
     fig, (a, b) = plt.subplots(1, 2, figsize=(16.5, 6.0), gridspec_kw={"wspace": 0.62})
     fig.subplots_adjust(left=0.06, right=0.84, top=0.84, bottom=0.2)
     lay = _Layout(runs, xkey)
-    _stack(a, lay, [(lab, SERIES[slot], [r.summary.get(key) for r in runs])
-                    for key, lab, slot in PHASES], "seconds")
-    a.set_title("Wall time by phase")
+    scales = []
 
-    totals = {}
-    per_run = []
+    phases, comps = [], []
     for r in runs:
         wall = r.summary["wall_s"]
-        comp = ({n: 100 * t / wall for n, t, _, _ in analysis.components(r, "time integration")
-                 if t == t and t} if wall else {})
-        per_run.append(comp)
-        for n, c in comp.items():
-            totals[n] = totals.get(n, 0.0) + c
+        shares, scale = _shares(wall, {key: r.summary.get(key) for key, _, _ in PHASES})
+        phases.append(shares)
+        scales.append(scale)
+        children = {n: t for n, t, _, _ in analysis.components(r, "time integration")}
+        # Time inside time integration that no child timer accounts for (negative when the
+        # children's maxima over ranks overshoot; _shares ignores that).
+        children[INNER] = (r.summary["integration_s"] or 0.0) - sum(
+            v for v in children.values() if v == v)
+        shares, scale = _shares(wall, children)
+        comps.append(shares)
+        scales.append(scale)
+
+    series = [(lab, SERIES[slot], [p.get(key) for p in phases]) for key, lab, slot in PHASES]
+    series.append(("other / untimed", REST_COLOR, [p.get(REST) for p in phases]))
+    _stack(a, lay, series, "% of total run time")
+    a.set_ylim(0, 100)
+    a.set_title("Wall time by phase\n(% of total run time)")
+
+    totals = {}
+    for c in comps:
+        for n, v in c.items():
+            if n not in (REST, INNER):
+                totals[n] = totals.get(n, 0.0) + v
     top = sorted(totals, key=lambda n: -totals[n])[:6]
-    series = [(n, SERIES[i], [c.get(n) for c in per_run]) for i, n in enumerate(top)]
-    if len(totals) > len(top):
-        series.append(("other", OTHER,
-                       [sum(v for n, v in c.items() if n not in top) for c in per_run]))
+    series = [(n, SERIES[i], [c.get(n) for c in comps]) for i, n in enumerate(top)]
+    series.append(("other in time integration", OTHER,
+                   [sum(v for n, v in c.items() if n not in top and n != REST)
+                    for c in comps]))
+    series.append((OUTSIDE, REST_COLOR, [c.get(REST) for c in comps]))
     _stack(b, lay, series, "% of total run time")
-    b.set_title("Time-integration components\n(% of total run time; the rest is outside time integration)")
-    return _finish(fig, "Where the time goes, run by run", analysis.caveats(runs))
+    b.set_ylim(0, 100)
+    b.set_title("Time-integration components\n(% of total run time)")
+
+    notes = list(analysis.caveats(runs))
+    if max(scales) > 1.005:
+        notes.append("Some bars were scaled down to 100%: timer maxima over ranks add up to "
+                     f"as much as {100 * (max(scales) - 1):.1f}% more than the run's total time.")
+    return _finish(fig, "Where the time goes, run by run", notes)
 
 
 def _imbalance_matrix(runs, limit=12):
