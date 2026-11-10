@@ -31,6 +31,11 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
+def _title(ax):
+    """An axes' title wherever it sits (the left location comes from viz's rcParams)."""
+    return ax.get_title("left") or ax.get_title()
+
+
 def png_ok(path):
     return path.exists() and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -52,7 +57,7 @@ def test_single_run_save(tmp_path, capsys):
 def test_study_save_has_scaling_breakdown_quality(study, tmp_path):
     out = tmp_path / "out"
     viz.main([str(study), "--save", str(out)])
-    for name in ("scaling", "breakdown", "quality"):
+    for name in ("scaling", "breakdown", "quality", "steps"):
         assert png_ok(out / f"{name}.png"), name
     rows = read_csv(out / "results.csv")
     assert [int(r["ranks"]) for r in rows] == [96, 192, 384]
@@ -86,7 +91,7 @@ def test_two_series_get_a_legend_and_distinct_colors(tmp_path):
     runs = analysis.load_runs([root])
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    assert set(figs) == {"scaling", "breakdown", "quality"}
+    assert set(figs) == {"scaling", "breakdown", "quality", "steps"}
     legend = figs["scaling"].axes[0].get_legend()
     assert legend is not None and len(legend.get_texts()) == 2
     assert any("mixed" in t.get_text() for t in figs["scaling"].texts)
@@ -109,7 +114,7 @@ def test_bars_are_clustered_by_rank_count_with_one_bar_per_series(tmp_path):
                for k, xs in by_ranks.items() for x in xs)
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    thr = figs["quality"].axes[2]                                 # throughput
+    thr = figs["quality"].axes[1]                                 # throughput
     assert [t.get_text() for t in thr.get_legend().get_texts()] == ["96/node", "192/node"]
     assert [t.get_text() for t in thr.get_xticklabels()] == ["1536", "3072", "6144", "12288"]
 
@@ -129,6 +134,7 @@ def test_incomplete_runs_do_not_break_the_figures(tmp_path):
     out = tmp_path / "out"
     viz.main([str(root), "--save", str(out)])
     assert png_ok(out / "breakdown.png") and png_ok(out / "quality.png")
+    assert png_ok(out / "steps.png")
     rows = {r["name"]: r for r in read_csv(out / "results.csv")}
     assert rows["crashed"]["status"] == "incomplete" and rows["crashed"]["wall_s"] == ""
     # and a lone crashed run still plots
@@ -161,7 +167,7 @@ def test_default_is_interactive_windows(study, monkeypatch):
     monkeypatch.setattr(viz, "NON_INTERACTIVE", set())     # pretend a display exists
     monkeypatch.setattr(plt, "show", lambda *a, **k: shown.append(len(plt.get_fignums())))
     viz.main([str(study)])
-    assert shown == [3]                                    # one show() with all three figures
+    assert shown == [4]                                    # one show() with all four figures
 
 
 def test_missing_matplotlib_still_writes_csv(study, tmp_path, monkeypatch):
@@ -204,9 +210,10 @@ def test_x_nodes_clusters_bars_by_node_count(tmp_path):
     assert len(by_nodes.slots) == 3 and len({round(x) for x in by_nodes.xs}) == 3
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs, "nodes")
-    for name, ax_index in (("breakdown", 0), ("breakdown", 1), ("quality", 1), ("quality", 2),
-                           ("quality", 3)):
+    for name, ax_index in (("breakdown", 0), ("breakdown", 1), ("quality", 0), ("quality", 1),
+                           ("quality", 2)):
         ax = figs[name].axes[ax_index]
+        ax.figure.canvas.draw()                             # log axes label their ticks at draw
         assert [t.get_text() for t in ax.get_xticklabels()] == ["16", "22", "32"], (name, ax_index)
         assert ax.get_xlabel() == "nodes"
 
@@ -269,12 +276,73 @@ def test_shares_cover_the_whole_run():
     assert viz._shares(None, {"a": 1.0}) == ({}, 1.0)
 
 
-def test_imbalance_heatmap_columns_follow_the_bar_clusters(tmp_path):
+def test_imbalance_is_a_line_per_series_in_percent_of_run_time(tmp_path):
     root = tmp_path / "tpn"
-    for n in (16, 32):
+    for n in (16, 32, 64):
         for tpn in (96, 192):
             logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    runs = analysis.load_runs([root])
     import matplotlib.pyplot as plt
-    figs = viz.build_figures(plt, analysis.load_runs([root]), "nodes")
-    labels = [t.get_text() for t in figs["quality"].axes[0].get_xticklabels()]
-    assert labels == ["16 · 96/node", "16 · 192/node", "32 · 96/node", "32 · 192/node"]
+    ax = viz.build_figures(plt, runs, "nodes")["quality"].axes[0]
+    assert ax.get_ylabel() == "% of total run time"
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["96/node", "192/node"]
+    assert len(ax.lines) == 2
+    for line, tpn in zip(ax.lines, (96, 192)):
+        assert list(line.get_xdata()) == [16, 32, 64]
+        expected = [r.summary["imbalance_lost_pct"] for r in runs if r.tasks_per_node == tpn]
+        assert list(line.get_ydata()) == pytest.approx(expected) and all(v > 0 for v in expected)
+    assert ax.get_ylim()[1] > max(max(line.get_ydata()) for line in ax.lines)
+
+
+def test_imbalance_loss_adds_up_the_components(study):
+    (run, *_) = analysis.load_runs([study])
+    log = run.log
+    parts = dict(analysis.imbalance_loss(run))
+    assert "physics driver" not in parts                    # its schemes stand in for it
+    assert parts["cu_ntiedtke"] == pytest.approx(
+        (1 - log.timer("cu_ntiedtke").par_eff) * log.timer("cu_ntiedtke").total)
+    s = run.summary
+    assert s["imbalance_lost_s"] == pytest.approx(sum(parts.values()))
+    assert s["imbalance_lost_pct"] == pytest.approx(100 * s["imbalance_lost_s"] / s["wall_s"])
+    assert 0 < s["imbalance_lost_pct"] < 100
+
+
+def test_same_size_runs_get_imbalance_bars_and_a_panel_per_run(tmp_path):
+    root = tmp_path / "io"
+    for name, kw in (("with_out", {}), ("less_out", {"outputs": 1})):
+        logsynth.write_experiment(root, name, 2, **kw)
+    import matplotlib.pyplot as plt
+    figs = viz.build_figures(plt, analysis.load_runs([root]))
+    assert figs["quality"].axes[0].patches and not figs["quality"].axes[0].lines
+    assert sorted(_title(ax) for ax in figs["steps"].axes if ax.axison) == [
+        "less_out", "with_out"]
+
+
+def test_step_histograms_are_per_size_with_series_overlaid(tmp_path):
+    root = tmp_path / "tpn"
+    for n in (16, 22, 32):
+        for tpn in (96, 192):
+            logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    runs = analysis.load_runs([root])
+    import matplotlib.pyplot as plt
+    fig = viz.build_figures(plt, runs, "nodes")["steps"]
+    axes = [ax for ax in fig.axes if ax.axison]
+    assert [_title(ax) for ax in axes] == ["16 nodes", "22 nodes", "32 nodes"]
+    assert [t.get_text() for t in axes[0].get_legend().get_texts()] == ["96/node", "192/node"]
+    for ax in axes:
+        assert len(ax.patches) == 4                         # a filled and a line histogram x 2
+        lo, hi = ax.get_xlim()
+        assert lo < 1.0 < hi                                # 1 = the run's own median
+        assert ax.get_xscale() == "log" and ax.get_yscale() == "log"
+        assert ax.get_xlabel() == "step time / run median"
+    by_ranks = viz.build_figures(plt, runs)["steps"]
+    assert [_title(ax) for ax in by_ranks.axes if ax.axison][0] == "1536 ranks"
+
+
+def test_step_histogram_survives_runs_without_steps(tmp_path):
+    root = tmp_path / "bad"
+    logsynth.write_experiment(root, "crashed", 1, complete=False)
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([root])
+    runs[0].log.step_times.clear()
+    assert viz.fig_steps(plt, runs * 1) is not None

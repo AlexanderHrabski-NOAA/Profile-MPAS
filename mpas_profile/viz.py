@@ -4,8 +4,8 @@
     ./plot-timing.py runs/strong-scaling-60km --save out # PNGs + results.csv + timers.csv
 
 One run gets an overview and a component breakdown. Several runs get a study view:
-scaling (when rank counts differ), phase and component breakdowns, and quality
-(load imbalance, step-time spread, throughput, cost).
+scaling (when rank counts differ), phase and component breakdowns, quality (time lost to
+load imbalance, throughput, cost), and the distribution of step times.
 
 matplotlib is imported only when figures are drawn, so loading logs and writing the
 CSV tables work without it. Chart conventions follow the dataviz skill: thin marks,
@@ -16,6 +16,7 @@ or more series, and ink-colored text.
 import argparse
 import csv
 import math
+import statistics
 import sys
 from pathlib import Path
 
@@ -25,8 +26,6 @@ from . import SetupError, analysis
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 OTHER = "#a8a7a1"
 SURFACE, INK, INK2, MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#8d8c86", "#e6e5e1"
-# One-hue sequential ramp (blue 100 -> 700) for the imbalance heatmap.
-SEQUENTIAL = ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
 
 # Wall-time phases of a run. Each keeps its slot color in every figure.
 PHASES = [("integration_s", "time integration", 0), ("output_s", "stream output", 1),
@@ -117,9 +116,9 @@ def _seconds(v):
     return f"{v:,.0f} s" if abs(v) >= 100 else f"{v:.1f} s"
 
 
-def _finish(fig, title, notes=()):
+def _finish(fig, title, notes=(), timer_note=True):
     fig.suptitle(title, x=0.01, ha="left", fontsize=12, color=INK)
-    text = "\n".join([*notes, NOTE])
+    text = "\n".join([*notes, *([NOTE] if timer_note else [])])
     fig.text(0.01, 0.006, text, fontsize=7.5, color=MUTED, va="bottom")
     try:
         fig.canvas.manager.set_window_title(title)
@@ -143,6 +142,21 @@ def _hbars(ax, labels, values, color, texts=None, room=1.3):
     ax.set_xlim(0, top * room)
 
 
+def _size(xkey):
+    """How a run's size is read for the x axis: node count, or MPI rank count."""
+    return (lambda r: r.nodes) if xkey == "nodes" else (lambda r: r.ntasks)
+
+
+def _series_by_size(runs, xkey):
+    """{group key: runs} when every series has distinct sizes and some series has several
+    (so a line through its runs means something), else None."""
+    size = _size(xkey)
+    by_group = analysis.groups(runs)
+    distinct = all(size(r) for r in runs) and all(
+        len({size(r) for r in rs}) == len(rs) for rs in by_group.values())
+    return by_group if distinct and any(len(rs) > 1 for rs in by_group.values()) else None
+
+
 class _Layout:
     """Where the per-run bars go.
 
@@ -160,7 +174,7 @@ class _Layout:
         self.gidx = [self.keys.index(analysis.group_key(r)) for r in runs]
         self.tags = analysis.group_tags(self.keys)
         self.xkey = xkey
-        size = (lambda r: r.nodes) if xkey == "nodes" else (lambda r: r.ntasks)
+        size = _size(xkey)
         sizes = [size(r) for r in runs]
         distinct = all(sizes) and all(len({size(r) for r in rs}) == len(rs)
                                       for rs in by_group.values())
@@ -526,75 +540,40 @@ def fig_breakdown(plt, runs, xkey="ranks"):
     return _finish(fig, "Where the time goes, run by run", notes)
 
 
-def _imbalance_matrix(runs, limit=12):
-    names, totals = [], {}
-    for r in runs:
-        rows = [*r.log.children("time integration"), *r.log.children("physics driver")]
-        for c in rows:
-            if c.name == "physics driver" or c.total != c.total:
-                continue
-            totals[c.name] = totals.get(c.name, 0.0) + c.total
-    names = sorted(totals, key=lambda n: -totals[n])[:limit]
-    data = []
-    for n in names:
-        row = []
-        for r in runs:
-            t = r.log.timer(n)
-            row.append(1 - t.par_eff if t is not None and t.par_eff == t.par_eff else math.nan)
-        data.append(row)
-    return names, data
-
-
 def fig_quality(plt, runs, xkey="ranks"):
-    from matplotlib.colors import LinearSegmentedColormap, to_rgba
-    fig, axes = plt.subplots(2, 2, figsize=(13.0, 8.6), gridspec_kw={"hspace": 0.5, "wspace": 0.25})
-    fig.subplots_adjust(left=0.17, right=0.97, top=0.9, bottom=0.14)
-    (a_imb, a_step), (a_thr, a_cost) = axes
+    fig, (a_imb, a_thr, a_cost) = plt.subplots(1, 3, figsize=(17.5, 5.6),
+                                               gridspec_kw={"wspace": 0.3})
+    fig.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.22)
     lay = _Layout(runs, xkey)
     xs = lay.xs
     cols = lay.colors()
-    imb_x = list(range(len(runs)))      # heatmap columns are always one per run
-    # Columns follow the bars' order (by size, then series) so clusters line up across panels.
-    order = sorted(imb_x, key=lambda i: xs[i]) if lay.grouped else imb_x
 
-    names, data = _imbalance_matrix([runs[i] for i in order])
-    if names:
-        cmap = LinearSegmentedColormap.from_list("blue", SEQUENTIAL)
-        vmax = max(0.5, max((v for row in data for v in row if v == v), default=0.5))
-        im = a_imb.imshow(data, aspect="auto", cmap=cmap, vmin=0, vmax=vmax)
-        a_imb.set_yticks(range(len(names)), names)
-        flat = len(runs) < 9 and not lay.grouped
-        a_imb.set_xticks(imb_x, [lay.labels[i] for i in order], rotation=0 if flat else 35,
-                         ha="center" if flat else "right", fontsize=8)
-        a_imb.grid(False)
-        if len(names) * len(runs) <= 70:
-            for i, row in enumerate(data):
-                for j, v in enumerate(row):
-                    if v == v:
-                        a_imb.text(j, i, f"{100 * v:.0f}", ha="center", va="center", fontsize=7.5,
-                                   color="white" if v > 0.6 * vmax else INK)
-        cb = fig.colorbar(im, ax=a_imb, fraction=0.04, pad=0.02)
-        cb.set_label("imbalance, 1 − par_eff (cell text: %)", fontsize=8)
-        cb.outline.set_visible(False)
-    else:
-        a_imb.axis("off")
-    a_imb.set_title("Load imbalance by component (darker = worse)")
-
-    data = [r.log.step_times[1:] for r in runs]
-    if any(data):
-        bp = a_step.boxplot([d or [math.nan] for d in data], positions=xs,
-                            widths=lay.width(0.5), patch_artist=True, showfliers=True,
-                            medianprops={"color": INK, "linewidth": 1.4})
-        for i, c in enumerate(cols):
-            bp["boxes"][i].set(facecolor=to_rgba(c, 0.22), edgecolor=c, linewidth=1.2)
-            for part in ("whiskers", "caps"):
-                for line in bp[part][2 * i:2 * i + 2]:
-                    line.set_color(c)
-            bp["fliers"][i].set(marker="o", markersize=3, markerfacecolor=c, markeredgecolor=c)
-    _set_run_axis(a_step, lay)
-    lay.legend(a_step, loc="upper right")
-    a_step.set_ylabel("seconds per step")
-    a_step.set_title("Step wall time (first step excluded); dots = spike steps")
+    lost = [r.summary["imbalance_lost_pct"] for r in runs]
+    by_group = _series_by_size(runs, xkey)
+    if by_group:                        # a line per series: easy to tell the series apart
+        size = _size(xkey)
+        ticks = []
+        for gi, rs in enumerate(by_group.values()):
+            pts = [(size(r), r.summary["imbalance_lost_pct"]) for r in rs
+                   if r.summary["imbalance_lost_pct"] is not None]
+            if pts:
+                ticks += [x for x, _ in pts]
+                a_imb.plot(*zip(*pts), marker="o", color=_color(gi), label=lay.tags[gi])
+        if ticks:
+            _rank_axis(a_imb, ticks, lay.xlabel)
+        if len(by_group) > 1:
+            a_imb.legend(loc="best")
+    else:                               # same-size runs: one bar per run
+        a_imb.bar(xs, [v or 0 for v in lost], color=cols, width=lay.width(0.6))
+        for x, v in zip(xs, lost):
+            if v and len(runs) <= 10:
+                a_imb.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8,
+                           color=INK2)
+        _set_run_axis(a_imb, lay)
+        lay.legend(a_imb, loc="upper left")
+    a_imb.set_ylim(0, max([v or 0 for v in lost] + [0]) * 1.2 or 1)
+    a_imb.set_ylabel("% of total run time")
+    a_imb.set_title("Time lost to load imbalance\n(sum of (1 − par_eff) × time over components)")
 
     sdd = [r.summary["sim_days_per_day"] for r in runs]
     a_thr.bar(xs, [v or 0 for v in sdd], color=cols, width=lay.width(0.6))
@@ -621,8 +600,86 @@ def fig_quality(plt, runs, xkey="ranks"):
     _set_run_axis(a_cost, lay)
     a_cost.set_ylabel(ylabel)
     a_cost.set_title(title)
-    return _finish(fig, "Quality of the runs: balance, steadiness, throughput, cost",
+    return _finish(fig, "Quality of the runs: load imbalance, throughput, cost",
                    analysis.caveats(runs))
+
+
+def _step_panels(runs, xkey, lay):
+    """[(title, [(run, series number)])]: one panel per size with the series overlaid, or,
+    when sizes do not tell runs apart, one panel per run."""
+    if _series_by_size(runs, xkey):
+        size = _size(xkey)
+        unit = "nodes" if xkey == "nodes" else "ranks"
+        return [(f"{s:g} {unit}", [(r, g) for r, g in zip(runs, lay.gidx) if size(r) == s])
+                for s in sorted({size(r) for r in runs})]
+    return [(r.label, [(r, g)]) for r, g in zip(runs, lay.gidx)]
+
+
+def fig_steps(plt, runs, xkey="ranks"):
+    """Histograms of step wall time over the run's median step time, one panel per size."""
+    import numpy as np
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
+    lay = _Layout(runs, xkey)
+    panels = _step_panels(runs, xkey, lay)
+    ratios = {}
+    for r in runs:
+        steps = [t for t in r.log.step_times[1:] if t > 0]      # the first step is not typical
+        if steps:
+            ratios[r.label] = np.array(steps) / statistics.median(steps)
+    n = len(panels)
+    ncols = min(n, 5)
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.7 * ncols + 0.8, 3.4 * nrows + 1.6),
+                             sharex=True, sharey=True, squeeze=False)
+    fig.subplots_adjust(left=0.07 if ncols > 2 else 0.12, right=0.985, top=0.8 if nrows == 1
+                        else 0.88, bottom=0.2 if nrows == 1 else 0.13, wspace=0.12, hspace=0.35)
+    for ax in axes.flat[n:]:
+        ax.axis("off")
+    if not ratios:
+        axes[0, 0].text(0.5, 0.5, "no completed steps in the logs", ha="center",
+                        transform=axes[0, 0].transAxes, color=INK2)
+        return _finish(fig, "Step wall time, relative to each run's median", timer_note=False)
+
+    allr = np.concatenate(list(ratios.values()))
+    # Always room for the median (1) and the spike threshold, whatever the data does.
+    lo = min(allr.min(), 0.87)
+    hi = max(allr.max(), analysis.SPIKE_FACTOR * 1.15)
+    edges = np.geomspace(lo, hi, 51)
+    floor = 0.5 / max(len(v) for v in ratios.values())          # half a step: the log-axis bottom
+    k0, k1 = math.floor(math.log2(lo)), math.ceil(math.log2(hi))
+    for ax, (title, members) in zip(axes.flat, panels):
+        for r, g in members:
+            if r.label not in ratios:
+                continue
+            frac = np.histogram(ratios[r.label], edges)[0] / len(ratios[r.label])
+            frac = np.maximum(frac, floor)
+            c = _color(g)
+            ax.stairs(frac, edges, baseline=floor, fill=True, color=to_rgba(c, 0.28))
+            ax.stairs(frac, edges, color=c, linewidth=1.3)
+        ax.axvline(1.0, color=MUTED, linewidth=1.0, zorder=1)
+        ax.axvline(analysis.SPIKE_FACTOR, color=MUTED, linewidth=1.0, linestyle="--", zorder=1)
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.set_xlim(edges[0], edges[-1])
+        ax.set_ylim(floor, 1.0)
+        ax.xaxis.set_major_locator(FixedLocator([2.0 ** k for k in range(k0, k1 + 1)]))
+        ax.xaxis.set_minor_locator(NullLocator())
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}×"))
+        ax.set_title(title)
+    for ax in axes[-1]:
+        ax.set_xlabel("step time / run median")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("fraction of steps")
+    if len(lay.keys) > 1:
+        axes[0, 0].legend(handles=[Patch(color=_color(i), label=t)
+                                   for i, t in enumerate(lay.tags)], loc="upper right")
+    notes = ["Step times are rank 0's, first step excluded. Solid line: the run's median; "
+             f"dashed: spike threshold ({analysis.SPIKE_FACTOR:g}× median).",
+             *analysis.caveats(runs)]
+    return _finish(fig, "Step wall time, relative to each run's median", notes,
+                   timer_note=False)
 
 
 def build_figures(plt, runs, xkey="ranks"):
@@ -635,6 +692,7 @@ def build_figures(plt, runs, xkey="ranks"):
         figs["scaling"] = fig_scaling(plt, runs, xkey)
     figs["breakdown"] = fig_breakdown(plt, runs, xkey)
     figs["quality"] = fig_quality(plt, runs, xkey)
+    figs["steps"] = fig_steps(plt, runs, xkey)
     return figs
 
 
@@ -655,7 +713,7 @@ def parse_args(argv):
                    help="Figure file format for --save (default png).")
     p.add_argument("--no-csv", action="store_true", help="With --save, skip the CSV files.")
     p.add_argument("--x", choices=("ranks", "nodes"), default="ranks",
-                   help="Scaling-plot x axis (default ranks). 'nodes' needs provenance.yaml.")
+                   help="Study-plot x axis (default ranks). 'nodes' needs provenance.yaml.")
     return p.parse_args(argv)
 
 

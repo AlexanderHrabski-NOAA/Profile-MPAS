@@ -183,6 +183,20 @@ def step_stats(step_times):
     }
 
 
+def imbalance_loss(run):
+    """Time lost to load imbalance: [(timer name, seconds)].
+
+    A timer with parallel efficiency e and total time T loses (1 - e) x T against a
+    perfectly balanced run. The timers are the children of `time integration`, with
+    `physics driver` replaced by its own children so no time is counted twice.
+    """
+    log = run.log
+    rows = [*(c for c in log.children("time integration") if c.name != "physics driver"),
+            *log.children("physics driver")]
+    return [(c.name, (1 - c.par_eff) * c.total) for c in rows
+            if c.par_eff == c.par_eff and c.total == c.total]
+
+
 def summarize(run):
     """One flat row per run. Unknown values are None."""
     log = run.log
@@ -211,6 +225,8 @@ def summarize(run):
     else:
         status = "incomplete"
 
+    lost = sum(v for _, v in imbalance_loss(run)) if log.timers else None
+
     row = {
         "name": run.label, "resolution": run.resolution, "mode": run.mode,
         "output": run.output, "pio": run.pio, "nodes": nodes, "ranks": ranks,
@@ -221,6 +237,8 @@ def summarize(run):
         "wall_s": wall, "initialize_s": val("initialize"), "read_ics_s": val("read_ICs"),
         "integration_s": integ, "output_s": writes, "diagnostics_s": val("diagnostic_fields"),
         "output_writes": len(log.stream_output),
+        "imbalance_lost_s": lost,
+        "imbalance_lost_pct": 100 * lost / wall if lost is not None and wall else None,
         "sim_days_per_day": sim / wall if sim and wall else None,
         "node_hours_per_sim_day": (nodes * wall / 3600.0 / (sim / DAY)
                                    if nodes and wall and sim else None),
