@@ -1,0 +1,17 @@
+# Cost of model I/O at 10 km: output off vs. on with 1 or 2 PIO ranks per node.
+# Run with:  ./build-and-run.py studies/io-scaling-60km.yaml
+study: io-scaling-10km
+
+defaults:
+  resolution: 10km
+  nodes: 64
+  tasks_per_node: 96
+  profile: native
+  walltime: "01:30:00"
+  run_duration: "2_00:00:00"
+  mpas:
+    ref: MPAS-v8.4.2-1.19
+
+experiments:
+  - sweep:
+      pio.iotasks_per_node: [0, 1, 2]
