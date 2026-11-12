@@ -5,7 +5,7 @@
 
 One run gets an overview and a component breakdown. Several runs get a study view:
 scaling (when rank counts differ), phase and component breakdowns, load imbalance (in
-total and component by component), quality (throughput, cost), and the distribution of
+total and component by component), quality (wall time per forecast day, cost), and the distribution of
 step times.
 
 matplotlib is imported only when figures are drawn, so loading logs and writing the
@@ -654,30 +654,31 @@ def fig_imbalance_components(plt, runs, xkey="ranks", limit=8):
 
 
 def fig_quality(plt, runs, xkey="ranks"):
-    fig, (a_thr, a_cost) = plt.subplots(1, 2, figsize=(12.0, 5.6), gridspec_kw={"wspace": 0.28})
+    fig, (a_time, a_cost) = plt.subplots(1, 2, figsize=(12.0, 5.6), gridspec_kw={"wspace": 0.28})
     fig.subplots_adjust(left=0.07, right=0.985, top=0.84, bottom=0.22)
     lay = _Layout(runs, xkey)
     xs = lay.xs
     cols = lay.colors()
 
-    sdd = [r.summary["sim_days_per_day"] for r in runs]
-    a_thr.bar(xs, [v or 0 for v in sdd], color=cols, width=lay.width(0.6))
-    for x, v in zip(xs, sdd):
+    wmin = [r.summary["wall_min_per_sim_day"] for r in runs]
+    a_time.bar(xs, [v or 0 for v in wmin], color=cols, width=lay.width(0.6))
+    for x, v in zip(xs, wmin):
         if v and len(runs) <= 10:
-            a_thr.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color=INK2)
-    _set_run_axis(a_thr, lay)
-    lay.legend(a_thr, loc="upper left")
+            a_time.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color=INK2)
+    _set_run_axis(a_time, lay)
+    lay.legend(a_time, loc="upper left")
     if lay.grouped:
-        a_thr.set_ylim(0, max([v or 0 for v in sdd] + [0]) * 1.22)
-    a_thr.set_ylabel("simulated days per day")
-    a_thr.set_title("Throughput")
+        a_time.set_ylim(0, max([v or 0 for v in wmin] + [0]) * 1.22)
+    a_time.set_ylabel("wall minutes per forecast day")
+    a_time.set_title("Time to forecast one day\n(lower is faster)")
 
     nh = [r.summary["node_hours_per_sim_day"] for r in runs]
     if all(nh):
-        vals, ylabel, title = nh, "node-hours per simulated day", "Cost"
+        vals, ylabel, title = nh, "node-hours per simulated day", "Cost\n(lower is cheaper)"
     else:
         vals = [r.summary["core_s_per_cell_step"] for r in runs]
-        ylabel, title = "core-seconds per cell per step", "Cost (nodes unknown, so per cell-step)"
+        ylabel = "core-seconds per cell per step"
+        title = "Cost (nodes unknown, so per cell-step)\n(lower is cheaper)"
     a_cost.bar(xs, [v or 0 for v in vals], color=cols, width=lay.width(0.6))
     for x, v in zip(xs, vals):
         if v and len(runs) <= 10:
@@ -685,7 +686,7 @@ def fig_quality(plt, runs, xkey="ranks"):
     _set_run_axis(a_cost, lay)
     a_cost.set_ylabel(ylabel)
     a_cost.set_title(title)
-    return _finish(fig, "Quality of the runs: throughput and cost", analysis.caveats(runs))
+    return _finish(fig, "Quality of the runs: time per forecast day and cost", analysis.caveats(runs))
 
 
 def _step_panels(runs, xkey, lay):

@@ -114,7 +114,7 @@ def test_bars_are_clustered_by_rank_count_with_one_bar_per_series(tmp_path):
                for k, xs in by_ranks.items() for x in xs)
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    thr = figs["quality"].axes[0]                                 # throughput
+    thr = figs["quality"].axes[0]                                 # time per forecast day
     assert [t.get_text() for t in thr.get_legend().get_texts()] == ["96/node", "192/node"]
     assert [t.get_text() for t in thr.get_xticklabels()] == ["1536", "3072", "6144", "12288"]
 
@@ -405,3 +405,15 @@ def test_imbalance_figures_survive_runs_without_timer_tables(tmp_path):
     runs = analysis.load_runs([root])
     assert viz.fig_imbalance(plt, runs) is not None
     assert viz.fig_imbalance_components(plt, runs) is not None
+
+
+def test_quality_shows_wall_minutes_per_forecast_day(study):
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([study])
+    ax = viz.build_figures(plt, runs)["quality"].axes[0]
+    assert ax.get_ylabel() == "wall minutes per forecast day"
+    heights = [p.get_height() for p in ax.patches]
+    expected = [r.summary["wall_s"] / 60 / (r.summary["sim_s"] / 86400) for r in runs]
+    assert heights == pytest.approx(expected)
+    # the inverse of simulated days per day, in minutes
+    assert heights == pytest.approx([1440 / r.summary["sim_days_per_day"] for r in runs])

@@ -249,6 +249,7 @@ def summarize(run):
         "imbalance_lost_s": lost,
         "imbalance_lost_pct": 100 * lost / wall if lost is not None and wall else None,
         "sim_days_per_day": sim / wall if sim and wall else None,
+        "wall_min_per_sim_day": wall / 60.0 / (sim / DAY) if sim and wall else None,
         "node_hours_per_sim_day": (nodes * wall / 3600.0 / (sim / DAY)
                                    if nodes and wall and sim else None),
         "core_s_per_cell_step": (wall * ranks / (log.ncells * log.nsteps)
