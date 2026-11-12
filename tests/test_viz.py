@@ -57,7 +57,8 @@ def test_single_run_save(tmp_path, capsys):
 def test_study_save_has_every_study_figure(study, tmp_path):
     out = tmp_path / "out"
     viz.main([str(study), "--save", str(out)])
-    for name in ("scaling", "breakdown", "imbalance", "imbalance_components", "quality", "steps"):
+    for name in ("scaling", "breakdown", "breakdown_seconds", "imbalance", "imbalance_components",
+                "quality", "steps"):
         assert png_ok(out / f"{name}.png"), name
     rows = read_csv(out / "results.csv")
     assert [int(r["ranks"]) for r in rows] == [96, 192, 384]
@@ -91,7 +92,8 @@ def test_two_series_get_a_legend_and_distinct_colors(tmp_path):
     runs = analysis.load_runs([root])
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    assert set(figs) == set(("scaling", "breakdown", "imbalance", "imbalance_components", "quality", "steps"))
+    assert set(figs) == set(("scaling", "breakdown", "breakdown_seconds", "imbalance", "imbalance_components",
+                "quality", "steps"))
     legend = figs["scaling"].axes[0].get_legend()
     assert legend is not None and len(legend.get_texts()) == 2
     assert any("mixed" in t.get_text() for t in figs["scaling"].texts)
@@ -168,7 +170,7 @@ def test_default_is_interactive_windows(study, monkeypatch):
     monkeypatch.setattr(viz, "NON_INTERACTIVE", set())     # pretend a display exists
     monkeypatch.setattr(plt, "show", lambda *a, **k: shown.append(len(plt.get_fignums())))
     viz.main([str(study)])
-    assert shown == [6]                                    # one show() with all six figures
+    assert shown == [7]                                    # one show() with all seven figures
 
 
 def test_missing_matplotlib_still_writes_csv(study, tmp_path, monkeypatch):
@@ -417,3 +419,40 @@ def test_quality_shows_wall_minutes_per_forecast_day(study):
     assert heights == pytest.approx(expected)
     # the inverse of simulated days per day, in minutes
     assert heights == pytest.approx([1440 / r.summary["sim_days_per_day"] for r in runs])
+
+
+def test_breakdown_seconds_has_the_same_stacks_in_absolute_time(study):
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([study])
+    figs = viz.build_figures(plt, runs)
+    rel, ab = figs["breakdown"], figs["breakdown_seconds"]
+    assert len(ab.axes) == 3
+    assert [ax.get_ylabel() for ax in ab.axes] == ["seconds"] * 3
+    assert ab.axes[0].get_ylim() != (0, 100)                    # not pinned to a percentage
+    # same series, in the same order, so the two figures color a component alike
+    names = lambda ax: [t.get_text() for t in ax.get_legend().get_texts()]   # noqa: E731
+    for i in range(3):
+        assert names(ab.axes[i]) == names(rel.axes[i])
+        assert [p.get_facecolor() for p in ab.axes[i].patches[:len(runs)]] == \
+               [p.get_facecolor() for p in rel.axes[i].patches[:len(runs)]]
+    # the first two panels stack to each run's wall time, the third to the physics driver's
+    for ax in ab.axes[:2]:
+        assert _stack_totals(ax, len(runs)) == pytest.approx([r.summary["wall_s"] for r in runs])
+    assert _stack_totals(ab.axes[2], len(runs)) == pytest.approx(
+        [r.log.timer("physics driver").total for r in runs])
+    # and relative to the relative figure, bar for bar
+    for ax_ab, ax_rel, whole in ((ab.axes[0], rel.axes[0], lambda r: r.summary["wall_s"]),
+                                 (ab.axes[1], rel.axes[1], lambda r: r.summary["wall_s"]),
+                                 (ab.axes[2], rel.axes[2],
+                                  lambda r: r.log.timer("physics driver").total)):
+        for p_ab, p_rel in zip(ax_ab.patches, ax_rel.patches):
+            run = runs[round(p_ab.get_x() + p_ab.get_width() / 2)]
+            assert p_ab.get_height() == pytest.approx(p_rel.get_height() * whole(run) / 100)
+    assert ab._suptitle.get_text().endswith("(seconds)")
+
+
+def test_absolute_shares_are_not_scaled_to_fit():
+    shares, scale = viz._shares(100.0, {"a": 70.0, "b": 40.0}, relative=False)
+    assert shares == {"a": 70.0, "b": 40.0, viz.REST: 0.0} and scale == pytest.approx(1.1)
+    shares, scale = viz._shares(100.0, {"a": 30.0}, relative=False)
+    assert shares == {"a": 30.0, viz.REST: 70.0} and scale == 1.0

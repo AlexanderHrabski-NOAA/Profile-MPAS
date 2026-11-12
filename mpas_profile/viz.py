@@ -4,9 +4,9 @@
     ./plot-timing.py runs/strong-scaling-60km --save out # PNGs + results.csv + timers.csv
 
 One run gets an overview and a component breakdown. Several runs get a study view:
-scaling (when rank counts differ), phase and component breakdowns, load imbalance (in
-total and component by component), quality (wall time per forecast day, cost), and the distribution of
-step times.
+scaling (when rank counts differ), phase and component breakdowns (as percentages and in
+seconds), load imbalance (in total and component by component), quality (wall time per
+forecast day, cost), and the distribution of step times.
 
 matplotlib is imported only when figures are drawn, so loading logs and writing the
 CSV tables work without it. Chart conventions follow the dataviz skill: thin marks,
@@ -437,21 +437,24 @@ INNER = "\0inner"        # key for time integration's own time, outside its chil
 REST_COLOR = "#d2d1cc"
 
 
-def _shares(wall, parts):
-    """Each part's percent of a run's wall time, with the uncovered remainder under REST.
+def _shares(wall, parts, relative=True):
+    """Each part's share of a run's wall time, with the uncovered remainder under REST.
 
-    `parts` is {name: seconds}. The shares sum to exactly 100: timers are maxima over
-    ranks, so parts can add up to slightly more than the whole, in which case everything is
-    scaled down together. Returns (shares, scale) where scale is parts / wall before
-    scaling (1.0 when they fit), or ({}, 1.0) when the wall time is unknown.
+    `parts` is {name: seconds}. By default the shares are percents that sum to exactly 100:
+    timers are maxima over ranks, so parts can add up to slightly more than the whole, in
+    which case everything is scaled down together. With `relative=False` the shares stay in
+    seconds and are not scaled, so a stack can rise slightly above the wall time. Returns
+    (shares, scale) where scale is parts / wall before any scaling (1.0 when they fit), or
+    ({}, 1.0) when the wall time is unknown.
     """
     if not wall:
         return {}, 1.0
     parts = {n: v for n, v in parts.items() if v and v == v and v > 0}
     rest = max(wall - sum(parts.values()), 0.0)
     total = sum(parts.values()) + rest
-    shares = {n: 100 * v / total for n, v in parts.items()}
-    shares[REST] = 100 * rest / total
+    unit = 100 / total if relative else 1.0
+    shares = {n: unit * v for n, v in parts.items()}
+    shares[REST] = unit * rest
     return shares, total / wall
 
 
@@ -463,13 +466,13 @@ def _series_style(i):
     return SERIES[i % len(SERIES)], HATCHES[(i // len(SERIES)) % len(HATCHES)]
 
 
-def _parent_shares(runs, parent, scales, of_parent=False):
+def _parent_shares(runs, parent, scales, of_parent=False, relative=True):
     """Per run, the shares for each direct child timer of `parent`.
 
-    Shares are of the run's wall time, or of the parent's own time when `of_parent`. The
-    parent's own time (what none of its children account for) goes under INNER, and, for
-    shares of wall time, the rest of the run under REST. Appends each run's scale (see
-    _shares) to `scales`.
+    Shares are of the run's wall time, or of the parent's own time when `of_parent`, in
+    percent or, with `relative=False`, seconds. The parent's own time (what none of its
+    children account for) goes under INNER, and, for shares of wall time, the rest of the
+    run under REST. Appends each run's scale (see _shares) to `scales`.
     """
     out = []
     for r in runs:
@@ -478,21 +481,28 @@ def _parent_shares(runs, parent, scales, of_parent=False):
         children[INNER] = (total.total if total else 0.0) - sum(
             v for v in children.values() if v == v)
         shares, scale = _shares(total.total if total and of_parent else
-                                (None if of_parent else r.summary["wall_s"]), children)
+                                (None if of_parent else r.summary["wall_s"]), children,
+                                relative)
         out.append(shares)
         scales.append(scale)
     return out
 
 
-def _component_series(shares, parent, outside=True):
-    """Stack series for `_stack`: every child of `parent`, largest first, then the parent's
-    own remaining time, then (unless `outside` is False) the rest of the run."""
+def _component_order(shares):
+    """Child names, the largest first over all runs."""
     totals = {}
     for c in shares:
         for n, v in c.items():
             if n not in (REST, INNER):
                 totals[n] = totals.get(n, 0.0) + v
-    names = sorted(totals, key=lambda n: -totals[n])
+    return sorted(totals, key=lambda n: -totals[n])
+
+
+def _component_series(shares, parent, outside=True, order=None):
+    """Stack series for `_stack`: every child of `parent`, largest first (or in `order`),
+    then the parent's own remaining time, then (unless `outside` is False) the rest of the
+    run."""
+    names = order if order is not None else _component_order(shares)
     series = []
     for i, n in enumerate(names):
         color, hatch = _series_style(i)
@@ -503,42 +513,57 @@ def _component_series(shares, parent, outside=True):
     return series, bool(names)
 
 
-def fig_breakdown(plt, runs, xkey="ranks"):
+def fig_breakdown(plt, runs, xkey="ranks", absolute=False):
+    """Where the time goes, in three stacked-bar panels: the phases, the components of time
+    integration, and the schemes of the physics driver.
+
+    Relative (default): the first two panels as a percentage of total run time, so every
+    bar adds to 100%, and the third as a percentage of the physics driver's time.
+    `absolute`: the same stacks in seconds, so bar heights show how the time itself changes.
+    """
     fig, (a, b, c) = plt.subplots(1, 3, figsize=(25.0, 6.6), gridspec_kw={"wspace": 0.85})
     fig.subplots_adjust(left=0.04, right=0.91, top=0.84, bottom=0.2)
     lay = _Layout(runs, xkey)
     scales = []
+    relative = not absolute
 
     phases = []
     for r in runs:
         shares, scale = _shares(r.summary["wall_s"],
-                                {key: r.summary.get(key) for key, _, _ in PHASES})
+                                {key: r.summary.get(key) for key, _, _ in PHASES}, relative)
         phases.append(shares)
         scales.append(scale)
     series = [(lab, SERIES[slot], [p.get(key) for p in phases]) for key, lab, slot in PHASES]
     series.append(("other / untimed", REST_COLOR, [p.get(REST) for p in phases]))
-    _stack(a, lay, series, "% of total run time")
-    a.set_ylim(0, 100)
-    a.set_title("Wall time by phase\n(% of total run time)")
+    _stack(a, lay, series, "% of total run time" if relative else "seconds")
+    a.set_ylim(0, 100 if relative else a.dataLim.y1 * 1.05 or 1)
+    a.set_title("Wall time by phase\n" + ("(% of total run time)" if relative else "(seconds)"))
 
     # Time integration is shown against the whole run; the physics driver against itself.
     for ax, parent, of_parent in ((b, "time integration", False), (c, "physics driver", True)):
         whole = f"{parent} time" if of_parent else "total run time"
-        series, found = _component_series(_parent_shares(runs, parent, scales, of_parent),
-                                          parent, outside=not of_parent)
-        _stack(ax, lay, series, f"% of {whole}")
-        ax.set_ylim(0, 100)
-        ax.set_title(f"{parent}: components\n(% of {whole})")
+        unit = f"% of {whole}" if relative else "seconds"
+        # The order (and so the colors) always follows the percent shares, so the relative
+        # and absolute figures color a component alike.
+        order = _component_order(_parent_shares(runs, parent, [], of_parent))
+        shares = _parent_shares(runs, parent, scales, of_parent, relative)
+        series, found = _component_series(shares, parent, outside=not of_parent, order=order)
+        _stack(ax, lay, series, unit)
+        ax.set_ylim(0, 100 if relative else ax.dataLim.y1 * 1.05 or 1)
+        ax.set_title(f"{parent}: components\n({unit})")
         if not found:
             ax.text(0.5, 0.5, f"no {parent} timers in these logs", ha="center", va="center",
                     transform=ax.transAxes, color=INK2)
 
     notes = list(analysis.caveats(runs))
     if max(scales) > 1.005:
+        over = f"as much as {100 * (max(scales) - 1):.1f}% more than the whole they belong to"
         notes.append("Some bars were scaled down to 100%: timer maxima over ranks add up to "
-                     f"as much as {100 * (max(scales) - 1):.1f}% more than the whole they "
-                     "are a share of.")
-    return _finish(fig, "Where the time goes, run by run", notes)
+                     f"{over}." if relative else
+                     "Some bars rise above the whole they belong to: timer maxima over ranks "
+                     f"add up to {over}.")
+    return _finish(fig, "Where the time goes, run by run" + ("" if relative else " (seconds)"),
+                   notes)
 
 
 def _series_panel(ax, lay, runs, xkey, values, legend=False):
@@ -776,6 +801,7 @@ def build_figures(plt, runs, xkey="ranks"):
     if analysis.is_scaling_study(runs):
         figs["scaling"] = fig_scaling(plt, runs, xkey)
     figs["breakdown"] = fig_breakdown(plt, runs, xkey)
+    figs["breakdown_seconds"] = fig_breakdown(plt, runs, xkey, absolute=True)
     figs["imbalance"] = fig_imbalance(plt, runs, xkey)
     figs["imbalance_components"] = fig_imbalance_components(plt, runs, xkey)
     figs["quality"] = fig_quality(plt, runs, xkey)
