@@ -183,18 +183,27 @@ def step_stats(step_times):
     }
 
 
-def imbalance_loss(run):
-    """Time lost to load imbalance: [(timer name, seconds)].
+def imbalance_rows(run):
+    """The components that load imbalance is measured on: [(timer name, total s, par_eff)].
 
-    A timer with parallel efficiency e and total time T loses (1 - e) x T against a
-    perfectly balanced run. The timers are the children of `time integration`, with
-    `physics driver` replaced by its own children so no time is counted twice.
+    These are the children of `time integration`, with `physics driver` replaced by its
+    own children so no time is counted twice. Timers without a parallel efficiency are left
+    out.
     """
     log = run.log
     rows = [*(c for c in log.children("time integration") if c.name != "physics driver"),
             *log.children("physics driver")]
-    return [(c.name, (1 - c.par_eff) * c.total) for c in rows
+    return [(c.name, c.total, c.par_eff) for c in rows
             if c.par_eff == c.par_eff and c.total == c.total]
+
+
+def imbalance_loss(run):
+    """Time lost to load imbalance: [(timer name, seconds)].
+
+    A timer with parallel efficiency e and total time T loses (1 - e) x T against a
+    perfectly balanced run (see imbalance_rows for which timers).
+    """
+    return [(name, (1 - eff) * total) for name, total, eff in imbalance_rows(run)]
 
 
 def summarize(run):

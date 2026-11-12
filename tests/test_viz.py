@@ -54,10 +54,10 @@ def test_single_run_save(tmp_path, capsys):
     assert "1 run(s)" in shown and "wrote" in shown
 
 
-def test_study_save_has_scaling_breakdown_quality(study, tmp_path):
+def test_study_save_has_every_study_figure(study, tmp_path):
     out = tmp_path / "out"
     viz.main([str(study), "--save", str(out)])
-    for name in ("scaling", "breakdown", "quality", "steps"):
+    for name in ("scaling", "breakdown", "imbalance", "imbalance_components", "quality", "steps"):
         assert png_ok(out / f"{name}.png"), name
     rows = read_csv(out / "results.csv")
     assert [int(r["ranks"]) for r in rows] == [96, 192, 384]
@@ -91,7 +91,7 @@ def test_two_series_get_a_legend_and_distinct_colors(tmp_path):
     runs = analysis.load_runs([root])
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    assert set(figs) == {"scaling", "breakdown", "quality", "steps"}
+    assert set(figs) == set(("scaling", "breakdown", "imbalance", "imbalance_components", "quality", "steps"))
     legend = figs["scaling"].axes[0].get_legend()
     assert legend is not None and len(legend.get_texts()) == 2
     assert any("mixed" in t.get_text() for t in figs["scaling"].texts)
@@ -114,7 +114,7 @@ def test_bars_are_clustered_by_rank_count_with_one_bar_per_series(tmp_path):
                for k, xs in by_ranks.items() for x in xs)
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs)
-    thr = figs["quality"].axes[1]                                 # throughput
+    thr = figs["quality"].axes[0]                                 # throughput
     assert [t.get_text() for t in thr.get_legend().get_texts()] == ["96/node", "192/node"]
     assert [t.get_text() for t in thr.get_xticklabels()] == ["1536", "3072", "6144", "12288"]
 
@@ -134,7 +134,8 @@ def test_incomplete_runs_do_not_break_the_figures(tmp_path):
     out = tmp_path / "out"
     viz.main([str(root), "--save", str(out)])
     assert png_ok(out / "breakdown.png") and png_ok(out / "quality.png")
-    assert png_ok(out / "steps.png")
+    assert png_ok(out / "steps.png") and png_ok(out / "imbalance.png")
+    assert png_ok(out / "imbalance_components.png")
     rows = {r["name"]: r for r in read_csv(out / "results.csv")}
     assert rows["crashed"]["status"] == "incomplete" and rows["crashed"]["wall_s"] == ""
     # and a lone crashed run still plots
@@ -167,7 +168,7 @@ def test_default_is_interactive_windows(study, monkeypatch):
     monkeypatch.setattr(viz, "NON_INTERACTIVE", set())     # pretend a display exists
     monkeypatch.setattr(plt, "show", lambda *a, **k: shown.append(len(plt.get_fignums())))
     viz.main([str(study)])
-    assert shown == [4]                                    # one show() with all four figures
+    assert shown == [6]                                    # one show() with all six figures
 
 
 def test_missing_matplotlib_still_writes_csv(study, tmp_path, monkeypatch):
@@ -210,8 +211,8 @@ def test_x_nodes_clusters_bars_by_node_count(tmp_path):
     assert len(by_nodes.slots) == 3 and len({round(x) for x in by_nodes.xs}) == 3
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, runs, "nodes")
-    for name, ax_index in (("breakdown", 0), ("breakdown", 1), ("quality", 0), ("quality", 1),
-                           ("quality", 2)):
+    for name, ax_index in (("breakdown", 0), ("breakdown", 1), ("imbalance", 0),
+                           ("imbalance", 1), ("quality", 0), ("quality", 1)):
         ax = figs[name].axes[ax_index]
         ax.figure.canvas.draw()                             # log axes label their ticks at draw
         assert [t.get_text() for t in ax.get_xticklabels()] == ["16", "22", "32"], (name, ax_index)
@@ -283,7 +284,7 @@ def test_imbalance_is_a_line_per_series_in_percent_of_run_time(tmp_path):
             logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
     runs = analysis.load_runs([root])
     import matplotlib.pyplot as plt
-    ax = viz.build_figures(plt, runs, "nodes")["quality"].axes[0]
+    ax = viz.build_figures(plt, runs, "nodes")["imbalance"].axes[0]
     assert ax.get_ylabel() == "% of total run time"
     assert [t.get_text() for t in ax.get_legend().get_texts()] == ["96/node", "192/node"]
     assert len(ax.lines) == 2
@@ -313,7 +314,8 @@ def test_same_size_runs_get_imbalance_bars_and_a_panel_per_run(tmp_path):
         logsynth.write_experiment(root, name, 2, **kw)
     import matplotlib.pyplot as plt
     figs = viz.build_figures(plt, analysis.load_runs([root]))
-    assert figs["quality"].axes[0].patches and not figs["quality"].axes[0].lines
+    assert figs["imbalance"].axes[0].patches and not figs["imbalance"].axes[0].lines
+    assert figs["imbalance_components"].axes[0].patches
     assert sorted(_title(ax) for ax in figs["steps"].axes if ax.axison) == [
         "less_out", "with_out"]
 
@@ -346,3 +348,60 @@ def test_step_histogram_survives_runs_without_steps(tmp_path):
     runs = analysis.load_runs([root])
     runs[0].log.step_times.clear()
     assert viz.fig_steps(plt, runs * 1) is not None
+
+
+def _tpn_study(tmp_path, nodes=(16, 32, 64)):
+    root = tmp_path / "tpn"
+    for n in nodes:
+        for tpn in (96, 192):
+            logsynth.write_experiment(root, f"n{n}x{tpn}", n, tasks_per_node=tpn)
+    return analysis.load_runs([root])
+
+
+def test_imbalance_by_component_adds_up_to_the_total(tmp_path):
+    runs = _tpn_study(tmp_path)
+    import matplotlib.pyplot as plt
+    fig = viz.build_figures(plt, runs, "nodes")["imbalance"]
+    total_ax, stack_ax = fig.axes[:2]
+    totals = {}
+    for line in total_ax.lines:
+        for x, y in zip(line.get_xdata(), line.get_ydata()):
+            totals[(line.get_label(), x)] = y
+    assert len(totals) == len(runs)
+    # each bar's stack, keyed the same way: the cluster's x is the node count, its slot the series
+    stacked = {}
+    for p in stack_ax.patches:
+        key = round(p.get_x() + p.get_width() / 2, 6)
+        stacked[key] = stacked.get(key, 0.0) + p.get_height()
+    assert sorted(stacked.values()) == pytest.approx(sorted(totals.values()))
+    labels = [t.get_text() for t in stack_ax.get_legend().get_texts()]
+    assert labels[-1] == "all other components" and "cu_ntiedtke" in labels
+
+
+def test_imbalance_components_has_a_panel_per_top_component(tmp_path):
+    runs = _tpn_study(tmp_path)
+    import matplotlib.pyplot as plt
+    fig = viz.build_figures(plt, runs, "nodes")["imbalance_components"]
+    axes = [ax for ax in fig.axes if ax.axison]
+    titles = [_title(ax).split("\n")[0] for ax in axes]
+    table = viz._imbalance_table(runs)
+    assert titles == viz._top_components(table, 8) and "physics driver" not in titles
+    first = axes[0]
+    assert [t.get_text() for t in first.get_legend().get_texts()] == ["96/node", "192/node"]
+    expected = {tpn: [100 * (1 - r.log.timer(titles[0]).par_eff) for r in runs
+                      if r.tasks_per_node == tpn] for tpn in (96, 192)}
+    for line, tpn in zip(first.lines, (96, 192)):
+        assert list(line.get_xdata()) == [16, 32, 64]
+        assert list(line.get_ydata()) == pytest.approx(expected[tpn])
+    assert len({ax.get_ylim() for ax in axes}) == 1          # one shared scale to compare on
+    assert first.get_ylabel() == "imbalance, 1 − par_eff (%)"
+
+
+def test_imbalance_figures_survive_runs_without_timer_tables(tmp_path):
+    root = tmp_path / "bad"
+    logsynth.write_experiment(root, "crashed", 1, complete=False)
+    logsynth.write_experiment(root, "crashed2", 2, complete=False)
+    import matplotlib.pyplot as plt
+    runs = analysis.load_runs([root])
+    assert viz.fig_imbalance(plt, runs) is not None
+    assert viz.fig_imbalance_components(plt, runs) is not None

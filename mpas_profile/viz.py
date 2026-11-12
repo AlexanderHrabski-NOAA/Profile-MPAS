@@ -4,8 +4,9 @@
     ./plot-timing.py runs/strong-scaling-60km --save out # PNGs + results.csv + timers.csv
 
 One run gets an overview and a component breakdown. Several runs get a study view:
-scaling (when rank counts differ), phase and component breakdowns, quality (time lost to
-load imbalance, throughput, cost), and the distribution of step times.
+scaling (when rank counts differ), phase and component breakdowns, load imbalance (in
+total and component by component), quality (throughput, cost), and the distribution of
+step times.
 
 matplotlib is imported only when figures are drawn, so loading logs and writing the
 CSV tables work without it. Chart conventions follow the dataviz skill: thin marks,
@@ -540,40 +541,124 @@ def fig_breakdown(plt, runs, xkey="ranks"):
     return _finish(fig, "Where the time goes, run by run", notes)
 
 
+def _series_panel(ax, lay, runs, xkey, values, legend=False):
+    """One value per run: a line per series against size, which makes series easy to tell
+    apart, or one bar per run when sizes do not tell runs apart. True when lines."""
+    by_group = _series_by_size(runs, xkey)
+    if by_group:
+        size = _size(xkey)
+        at = {id(r): v for r, v in zip(runs, values)}
+        ticks = []
+        for gi, rs in enumerate(by_group.values()):
+            pts = [(size(r), at[id(r)]) for r in rs if at[id(r)] is not None]
+            if pts:
+                ticks += [x for x, _ in pts]
+                ax.plot(*zip(*pts), marker="o", color=_color(gi), label=lay.tags[gi])
+        if ticks:
+            _rank_axis(ax, ticks, lay.xlabel)
+        if legend and len(by_group) > 1:
+            ax.legend(loc="best")
+        return True
+    ax.bar(lay.xs, [v or 0 for v in values], color=lay.colors(), width=lay.width(0.6))
+    for x, v in zip(lay.xs, values):
+        if v and len(runs) <= 10:
+            ax.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color=INK2)
+    _set_run_axis(ax, lay)
+    lay.legend(ax, loc="upper left")
+    return False
+
+
+def _imbalance_table(runs):
+    """Per run, {component: (% of total run time lost to imbalance, imbalance in %)}.
+
+    Imbalance is 1 - par_eff, the share of the component's time that a perfectly balanced
+    run would not spend. The first number weighs it by how long the component runs.
+    """
+    table = []
+    for r in runs:
+        wall = r.summary["wall_s"]
+        table.append({name: (100 * (1 - eff) * total / wall if wall else None, 100 * (1 - eff))
+                      for name, total, eff in analysis.imbalance_rows(r)})
+    return table
+
+
+def _top_components(table, n):
+    """The n components that lose the most time to imbalance, summed over runs."""
+    totals = {}
+    for d in table:
+        for name, (lost, _) in d.items():
+            totals[name] = totals.get(name, 0.0) + (lost or 0.0)
+    return sorted(totals, key=lambda name: -totals[name])[:n]
+
+
+def fig_imbalance(plt, runs, xkey="ranks"):
+    fig, (a, b) = plt.subplots(1, 2, figsize=(16.5, 6.2), gridspec_kw={"wspace": 0.55})
+    fig.subplots_adjust(left=0.06, right=0.84, top=0.84, bottom=0.2)
+    lay = _Layout(runs, xkey)
+    table = _imbalance_table(runs)
+
+    total = [r.summary["imbalance_lost_pct"] for r in runs]
+    _series_panel(a, lay, runs, xkey, total, legend=True)
+    a.set_ylim(0, max([v or 0 for v in total] + [0]) * 1.2 or 1)
+    a.set_ylabel("% of total run time")
+    a.set_title("Time lost to load imbalance\n(sum of (1 − par_eff) × time over components)")
+
+    top = _top_components(table, 10)
+    series = []
+    for i, name in enumerate(top):
+        color, hatch = _series_style(i)
+        series.append((name, color, [d[name][0] if name in d else None for d in table], hatch))
+    series.append(("all other components", OTHER,
+                   [sum(v[0] or 0.0 for n, v in d.items() if n not in top) for d in table]))
+    _stack(b, lay, series, "% of total run time")
+    b.set_title("The same loss, by component\n(the ten largest; bars add up to the left panel)")
+    return _finish(fig, "Load imbalance: how much of the run it costs, and where from",
+                   analysis.caveats(runs))
+
+
+def fig_imbalance_components(plt, runs, xkey="ranks", limit=8):
+    """One small panel per component: its own imbalance against size, a line per series."""
+    table = _imbalance_table(runs)
+    names = _top_components(table, limit)
+    n = max(len(names), 1)
+    ncols = min(n, 4)
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols + 0.8, 3.4 * nrows + 1.7),
+                             sharey=True, squeeze=False)
+    fig.subplots_adjust(left=0.07 if ncols > 2 else 0.12, right=0.985,
+                        top=0.8 if nrows == 1 else 0.88, bottom=0.2 if nrows == 1 else 0.11,
+                        wspace=0.12, hspace=0.6)
+    for ax in axes.flat[n:]:
+        ax.axis("off")
+    title = "Load imbalance of the components that lose the most time"
+    if not names:
+        axes[0, 0].text(0.5, 0.5, "no timer tables in these logs", ha="center",
+                        transform=axes[0, 0].transAxes, color=INK2)
+        return _finish(fig, title)
+    lay = _Layout(runs, xkey)
+    top = 0.0
+    for i, (ax, name) in enumerate(zip(axes.flat, names)):
+        imb = [d[name][1] if name in d else None for d in table]
+        lost = [d[name][0] for d in table if name in d and d[name][0] is not None]
+        _series_panel(ax, lay, runs, xkey, imb, legend=i == 0)
+        ax.set_title(f"{name}\n(avg {sum(lost) / len(lost):.1f}% of run time lost)"
+                     if lost else name, fontsize=9)
+        top = max([top] + [v for v in imb if v is not None])
+    for ax in axes.flat[:n]:
+        ax.set_ylim(0, top * 1.2 or 1)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("imbalance, 1 − par_eff (%)")
+    notes = ["Imbalance is 1 − par_eff: the share of a component's time lost to waiting for "
+             "its slowest rank. Panels are ordered by time lost.", *analysis.caveats(runs)]
+    return _finish(fig, title, notes)
+
+
 def fig_quality(plt, runs, xkey="ranks"):
-    fig, (a_imb, a_thr, a_cost) = plt.subplots(1, 3, figsize=(17.5, 5.6),
-                                               gridspec_kw={"wspace": 0.3})
-    fig.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.22)
+    fig, (a_thr, a_cost) = plt.subplots(1, 2, figsize=(12.0, 5.6), gridspec_kw={"wspace": 0.28})
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.84, bottom=0.22)
     lay = _Layout(runs, xkey)
     xs = lay.xs
     cols = lay.colors()
-
-    lost = [r.summary["imbalance_lost_pct"] for r in runs]
-    by_group = _series_by_size(runs, xkey)
-    if by_group:                        # a line per series: easy to tell the series apart
-        size = _size(xkey)
-        ticks = []
-        for gi, rs in enumerate(by_group.values()):
-            pts = [(size(r), r.summary["imbalance_lost_pct"]) for r in rs
-                   if r.summary["imbalance_lost_pct"] is not None]
-            if pts:
-                ticks += [x for x, _ in pts]
-                a_imb.plot(*zip(*pts), marker="o", color=_color(gi), label=lay.tags[gi])
-        if ticks:
-            _rank_axis(a_imb, ticks, lay.xlabel)
-        if len(by_group) > 1:
-            a_imb.legend(loc="best")
-    else:                               # same-size runs: one bar per run
-        a_imb.bar(xs, [v or 0 for v in lost], color=cols, width=lay.width(0.6))
-        for x, v in zip(xs, lost):
-            if v and len(runs) <= 10:
-                a_imb.text(x, v * 1.01, f"{v:.1f}", ha="center", va="bottom", fontsize=8,
-                           color=INK2)
-        _set_run_axis(a_imb, lay)
-        lay.legend(a_imb, loc="upper left")
-    a_imb.set_ylim(0, max([v or 0 for v in lost] + [0]) * 1.2 or 1)
-    a_imb.set_ylabel("% of total run time")
-    a_imb.set_title("Time lost to load imbalance\n(sum of (1 − par_eff) × time over components)")
 
     sdd = [r.summary["sim_days_per_day"] for r in runs]
     a_thr.bar(xs, [v or 0 for v in sdd], color=cols, width=lay.width(0.6))
@@ -600,8 +685,7 @@ def fig_quality(plt, runs, xkey="ranks"):
     _set_run_axis(a_cost, lay)
     a_cost.set_ylabel(ylabel)
     a_cost.set_title(title)
-    return _finish(fig, "Quality of the runs: load imbalance, throughput, cost",
-                   analysis.caveats(runs))
+    return _finish(fig, "Quality of the runs: throughput and cost", analysis.caveats(runs))
 
 
 def _step_panels(runs, xkey, lay):
@@ -691,6 +775,8 @@ def build_figures(plt, runs, xkey="ranks"):
     if analysis.is_scaling_study(runs):
         figs["scaling"] = fig_scaling(plt, runs, xkey)
     figs["breakdown"] = fig_breakdown(plt, runs, xkey)
+    figs["imbalance"] = fig_imbalance(plt, runs, xkey)
+    figs["imbalance_components"] = fig_imbalance_components(plt, runs, xkey)
     figs["quality"] = fig_quality(plt, runs, xkey)
     figs["steps"] = fig_steps(plt, runs, xkey)
     return figs
