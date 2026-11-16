@@ -1,0 +1,24 @@
+# Strong scaling of the 10 km case on Gaea C6, 16 to 64 nodes, without Score-P.
+# Mirrors strong-scaling-10km.yaml. At 96 ranks per node a C6 node is half packed,
+# at 192 it is fully packed (one rank per physical core).
+# Run on a C6 login node (gaea61-gaea66), from a clone under /gpfs/f6, with:
+#   ./build-and-run.py studies/strong-scaling-10km-gaeac6.yaml
+study: strong-scaling-10km-gaeac6
+
+defaults:
+  machine: gaeac6
+  account: CHANGEME        # your Gaea project; C6 has no default
+  resolution: 10km
+  profile: native          # no Scalasca install is configured for C6 (config/machines.yaml)
+  mpas:
+    ref: MPAS-v8.4.2-1.19   # branch, tag, or hash; omit to use the submodule pin
+  output: false
+  run_duration: "1_00:00:00"
+
+experiments:
+  - zip:
+      nodes: [16, 22, 32, 44, 64]
+      # Carried over from the Ursa study; adjust once you have C6 timings.
+      walltime: ["02:30:00", "02:00:00", "01:30:00", "01:15:00", "01:00:00"]
+    sweep:
+      tasks_per_node: [96, 192]
