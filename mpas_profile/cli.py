@@ -48,6 +48,15 @@ def run(argv):
     for key in sorted({e.resolution for e in study.experiments}):
         experiment.check_data(resolutions[key])
 
+    machines = config.load_machines()
+    for m in sorted({e.machine for e in study.experiments}):
+        paths = [study_dir, REPO / "partition"]
+        for key in sorted({e.resolution for e in study.experiments if e.machine == m}):
+            res = resolutions[key]
+            paths += experiment.data_dirs(res) + [partition.partition_dir(res)]
+            paths += [f for d in experiment.data_dirs(res) for f in sorted(d.iterdir())]
+        experiment.check_compute_fs(machines[m], paths)
+
     existing = [n for n, d in edirs.items() if d.exists()]
     if existing and not args.overwrite and not args.dry_run:
         raise SetupError("These experiment directories already exist: "
@@ -62,24 +71,26 @@ def run(argv):
     builds = {}
     for e in study.experiments:
         source, sha = sources[e.name]
-        builds.setdefault((sha, e.scorep), (source, build.build_dir(study_dir, sha, e.tag)))
+        builds.setdefault((sha, e.scorep, e.machine),
+                          (source, build.build_dir(study_dir, sha, e.tag, e.machine)))
 
     print("\nExperiments:")
-    table([[e.name, e.resolution, e.nodes, e.ntasks, e.tasks_per_node or "-",
+    table([[e.name, e.machine, e.resolution, e.nodes, e.ntasks, e.tasks_per_node or "-",
             sources[e.name][1][:12], e.tag, "on" if e.output else "off",
             f"{e.pio_num_iotasks}/{e.pio_stride}" if e.pio_num_iotasks else "all"]
            for e in study.experiments],
-          ["name", "res", "nodes", "ranks", "tpn", "mpas", "profile", "output", "pio"])
+          ["name", "machine", "res", "nodes", "ranks", "tpn", "mpas", "profile", "output", "pio"])
     print(f"\nBuilds: {len(builds)}")
-    for (sha, scorep), (source, bdir) in builds.items():
+    for (sha, scorep, machine), (source, bdir) in builds.items():
         state = "reuse" if (bdir / build.STAMP).exists() and not args.rebuild else "build"
         print(f"  {bdir.name}  [{state}]")
 
     # Rendering every template now catches template errors before any build.
     for e in study.experiments:
         res = resolutions[e.resolution]
-        render.namelist(e, res), render.streams(e, res), render.modulefile(e.scorep)
-        render.job(e, build.mpas_bin(build.build_dir(study_dir, sources[e.name][1], e.tag)))
+        render.namelist(e, res), render.streams(e, res), render.modulefile(e.scorep, e.machine)
+        render.job(e, build.mpas_bin(
+            build.build_dir(study_dir, sources[e.name][1], e.tag, e.machine)))
 
     needed = sorted({(e.resolution, e.ntasks) for e in study.experiments})
     gpmetis = {}
@@ -98,8 +109,8 @@ def run(argv):
     print("\nBuilding...")
     study_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(args.setup, study_dir / "study.yaml")
-    for (sha, scorep), (source, bdir) in builds.items():
-        build.ensure_build(bdir, source, sha, scorep, rebuild=args.rebuild)
+    for (sha, scorep, machine), (source, bdir) in builds.items():
+        build.ensure_build(bdir, source, sha, scorep, rebuild=args.rebuild, machine=machine)
 
     print("\nPartitioning...")
     for key, n in needed:
@@ -110,7 +121,7 @@ def run(argv):
     for e in study.experiments:
         res = resolutions[e.resolution]
         source, sha = sources[e.name]
-        bdir = build.build_dir(study_dir, sha, e.tag)
+        bdir = build.build_dir(study_dir, sha, e.tag, e.machine)
         edir = edirs[e.name]
         if edir.exists():
             shutil.rmtree(edir)

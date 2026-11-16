@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 
 from . import REPO, SetupError, build, partition, render
+from .config import load_machines
 
 
 def data_dirs(res):
@@ -22,6 +23,29 @@ def check_data(res):
     if not (partition.partition_dir(res) / res.graph_file).exists():
         raise SetupError(f"Missing graph file: "
                          f"{partition.partition_dir(res) / res.graph_file}")
+
+
+def check_compute_fs(machine, paths):
+    """Fail if anything the job reads or writes is outside the compute nodes' file system.
+
+    `paths` are checked after resolving symlinks, since data directories are usually links
+    to shared storage.
+    """
+    prefix = machine.compute_fs
+    if not prefix:
+        return
+    root = Path(prefix)
+    bad = []
+    for p in paths:
+        real = Path(p).resolve()
+        if real != root and root not in real.parents:
+            bad.append(f"{p}" + (f" -> {real}" if real != Path(p) else ""))
+    if bad:
+        shown = "\n  ".join(bad[:5]) + (f"\n  ... and {len(bad) - 5} more" if len(bad) > 5 else "")
+        raise SetupError(
+            f"Machine '{machine.key}': compute nodes only mount {prefix}, but these are "
+            f"elsewhere:\n  {shown}\nClone this repository under {prefix}, and keep the "
+            "ic/, fix/ and partition/ data there too.")
 
 
 def _link_contents(src_dir, dest):
@@ -38,13 +62,14 @@ def profile_repo_state():
 def stage(exp, res, edir, bdir, mpas_info, gpmetis_cmd):
     """Create the experiment directory contents (everything except the job id)."""
     edir.mkdir(parents=True)
-    mod_text = render.modulefile(exp.scorep)
+    mod_text = render.modulefile(exp.scorep, exp.machine)
+    module = load_machines()[exp.machine].module
 
     (edir / "namelist.atmosphere").write_text(render.namelist(exp, res))
     (edir / "streams.atmosphere").write_text(render.streams(exp, res))
     (edir / "job.fcst").write_text(render.job(exp, build.mpas_bin(bdir)))
     (edir / "modulefiles" / "mpas").mkdir(parents=True)
-    (edir / "modulefiles" / "mpas" / "ursa.intel.lua").write_text(mod_text)
+    (edir / "modulefiles" / "mpas" / f"{module}.lua").write_text(mod_text)
 
     # Small config files are copied so the experiment can't drift if the repo changes.
     for f in sorted((REPO / "config" / "mpas").glob("stream_list.*")):

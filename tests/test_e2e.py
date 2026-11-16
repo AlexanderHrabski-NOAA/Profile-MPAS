@@ -18,6 +18,11 @@ STUBS = {
                'for last; do :; done\nfor g; do :; done\n'
                'graph=${@: -2:1}\necho 0 > "$graph.part.$last"\n',
 }
+# MPI wrappers that report the compiler they call, for the build-time compiler check.
+WRAPPER = ('#!/bin/bash\ncase "$0" in *mpifort|*mpiifx) echo "${STUB_FC:-ifx} -I/x -lmpi";; '
+           '*mpic++|*mpiicpx) echo "icpx -I/x";; *) echo "icx -I/x";; esac\n')
+STUBS.update({name: WRAPPER for name in
+              ("mpicc", "mpic++", "mpifort", "mpiicx", "mpiicpx", "mpiifx")})
 MODULE_FN = '() { echo "module $*" >> "$STUB_LOG"; if [ "$1" = load ]; then export MODLOADED=$2; fi; }'
 
 
@@ -43,7 +48,7 @@ def world(tmp_path):
     (mpas / "build.sh").write_text(textwrap.dedent("""\
         #!/bin/bash
         echo "build.sh MODLOADED=$MODLOADED in $PWD" >> "$STUB_LOG"
-        test -f modulefiles/mpas/ursa.intel.lua || exit 9
+        test -f modulefiles/mpas/${EXPECT_MODULE:-ursa.intel}.lua || exit 9
         test -f ext/physics.F90 || { echo "nested submodule missing" >> "$STUB_LOG"; exit 8; }
         [ -n "$FAIL_BUILD" ] && exit 3
         mkdir -p build/bin && echo bin > build/bin/mpas_atmosphere
@@ -98,6 +103,7 @@ def test_sweep_end_to_end(world):
     assert r.returncode == 0, r.stdout + r.stderr
     log = world.log.read_text()
     assert log.count("build.sh") == 1                       # one shared build
+    assert "mpiifx -> ifx" in r.stdout                      # Ursa's compiler check ran
     assert log.count("sbatch") == 3
     assert log.count("gpmetis") == 2                        # 96 and 384; 192 pre-existed
     assert "MODLOADED=mpas/ursa.intel" in log
@@ -172,3 +178,75 @@ def test_native_and_bad_ref(world):
     s["defaults"]["mpas"]["ref"] = "nope"
     r = world.go(s, "--dry-run")
     assert r.returncode != 0 and "Cannot resolve MPAS ref" in r.stderr
+
+
+def gaea_fs(world, prefix=None):
+    """Point gaeac6's compute_fs at the test tree (it is /gpfs/f6 on the real machine)."""
+    p = world.root / "config" / "machines.yaml"
+    machines = yaml.safe_load(p.read_text())
+    machines["gaeac6"]["compute_fs"] = str(prefix or world.root.parent.resolve())
+    p.write_text(yaml.safe_dump(machines))
+
+
+def test_gaeac6_end_to_end(world):
+    gaea_fs(world)
+    s = study(world.mpas, nodes=(2,), machine="gaeac6", account="acct", profile="native",
+              tasks_per_node=192)
+    r = world.go(s, env_extra={"EXPECT_MODULE": "gaeac6.intel"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = world.log.read_text()
+    assert "MODLOADED=mpas/gaeac6.intel" in log and log.count("sbatch") == 1
+    assert "mpifort -> ifx" in r.stdout and "mpicc -> icx" in r.stdout
+    assert next((world.root / "runs/t/builds").iterdir()).name.endswith("-native-gaeac6")
+    e = world.root / "runs/t/experiments/60km_v1_native_n2x192_gaeac6"
+    assert (e / "modulefiles/mpas/gaeac6.intel.lua").exists()
+    assert not (e / "modulefiles/mpas/ursa.intel.lua").exists()
+    job = (e / "job.fcst").read_text()
+    assert "--clusters=c6" in job and "module load mpas/gaeac6.intel" in job
+    prov = yaml.safe_load((e / "provenance.yaml").read_text())
+    assert prov["experiment"]["machine"] == "gaeac6"
+    assert prov["jobid"].startswith("4242")   # `sbatch --parsable` prints "<id>;c6" on Gaea
+
+
+def test_machines_get_separate_builds(world):
+    gaea_fs(world)
+    s = study(world.mpas, nodes=(1,), profile="native", account="acct")
+    s["experiments"] = [{"nodes": 1, "machine": "ursa"},
+                        {"nodes": 1, "machine": "gaeac6", "tasks_per_node": 192}]
+    r = world.go(s, "--dry-run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Builds: 2" in r.stdout
+
+
+def test_gaeac6_refuses_paths_off_the_compute_file_system(world):
+    s = study(world.mpas, nodes=(1,), machine="gaeac6", account="acct", profile="native",
+              tasks_per_node=192)
+    r = world.go(s)    # the tree is not under /gpfs/f6
+    assert r.returncode != 0 and "only mount /gpfs/f6" in r.stderr
+    assert "sbatch" not in world.log.read_text() and not (world.root / "runs").exists()
+    # a data directory that links off the file system is caught even when the repo is fine
+    elsewhere = world.root.parent / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "f").write_text("x")
+    shutil.rmtree(world.root / "fix" / "60km")
+    (world.root / "fix" / "60km").symlink_to(elsewhere)
+    gaea_fs(world, world.root.resolve())
+    r = world.go(s, "--dry-run")
+    assert r.returncode != 0 and "elsewhere" in r.stderr
+
+
+def test_gaeac6_build_refuses_a_wrapper_that_is_not_ifx(world):
+    gaea_fs(world)
+    s = study(world.mpas, nodes=(1,), machine="gaeac6", account="acct", profile="native",
+              tasks_per_node=192)
+    r = world.go(s, env_extra={"EXPECT_MODULE": "gaeac6.intel", "STUB_FC": "ifort"})
+    assert r.returncode != 0 and "'mpifort' does not call ifx" in r.stderr
+    log = world.log.read_text()
+    assert "build.sh" not in log and "sbatch" not in log
+
+
+def test_ursa_build_refuses_a_wrapper_that_is_not_ifx(world):
+    r = world.go(study(world.mpas), env_extra={"STUB_FC": "ifort"})
+    assert r.returncode != 0 and "'mpiifx' does not call ifx" in r.stderr
+    log = world.log.read_text()
+    assert "build.sh" not in log and "sbatch" not in log

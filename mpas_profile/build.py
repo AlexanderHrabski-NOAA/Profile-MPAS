@@ -5,18 +5,30 @@ import subprocess
 from pathlib import Path
 
 from . import REPO, SetupError, render
+from .config import DEFAULT_MACHINE, load_machines
 
 DEFAULT_SOURCE = REPO / "MPAS-Model"
 STAMP = ".build-ok"
 
 # `module` is a shell function, so loading modules and building has to happen
-# in a single bash process. $1 is the clone. MPAS's build.sh reads the
-# modulefile in the clone's own modulefiles/ directory.
+# in a single bash process. $1 is the clone, $2 the file that defines `module`
+# on this machine, $3 the MPAS modulefile name, $4 the "wrapper=compiler ..." pairs to
+# verify (may be empty). MPAS's build.sh reads the modulefile in the clone's own
+# modulefiles/ directory.
 BUILD_SCRIPT = """
-type module >/dev/null 2>&1 || source /apps/lmod/lmod/init/bash
+type module >/dev/null 2>&1 || source "$2"
 set -e
 module use "$1/modulefiles"
-module load mpas/ursa.intel
+module load "mpas/$3"
+for pair in $4; do
+  w=${pair%%=*}; c=${pair#*=}
+  if ! { "$w" -show; "$w" --version; } 2>&1 | grep -qiw -- "$c"; then
+    echo "ERROR: after loading mpas/$3, '$w' does not call $c:" >&2
+    "$w" -show >&2 || true
+    exit 1
+  fi
+  echo "  $w -> $c"
+done
 cd "$1"
 ./build.sh
 """
@@ -74,16 +86,18 @@ def resolve(exp):
     return source, sha
 
 
-def build_dir(study_dir, sha, tag):
-    """`tag` is Experiment.tag; experiments with the same tag share a build."""
-    return Path(study_dir) / "builds" / f"{sha[:12]}-{tag}"
+def build_dir(study_dir, sha, tag, machine=DEFAULT_MACHINE):
+    """`tag` is Experiment.tag; experiments with the same tag and machine share a build.
+    The default machine keeps the plain name so existing builds are still found."""
+    suffix = "" if machine == DEFAULT_MACHINE else f"-{machine}"
+    return Path(study_dir) / "builds" / f"{sha[:12]}-{tag}{suffix}"
 
 
 def mpas_bin(bdir):
     return Path(bdir) / "build" / "bin" / "mpas_atmosphere"
 
 
-def ensure_build(bdir, source, sha, scorep, rebuild=False):
+def ensure_build(bdir, source, sha, scorep, rebuild=False, machine=DEFAULT_MACHINE):
     """Clone and build unless a finished build already exists."""
     bdir = Path(bdir)
     if (bdir / STAMP).exists() and not rebuild:
@@ -101,12 +115,15 @@ def ensure_build(bdir, source, sha, scorep, rebuild=False):
     git("submodule", "update", "--init", "--recursive", "--quiet", cwd=bdir)
 
     # build.sh reads the modulefile in the clone, so the rendered one goes there.
-    mod = bdir / "modulefiles" / "mpas" / "ursa.intel.lua"
+    m = load_machines()[machine]
+    mod = bdir / "modulefiles" / "mpas" / f"{m.module}.lua"
     mod.parent.mkdir(parents=True, exist_ok=True)
-    mod.write_text(render.modulefile(scorep))
+    mod.write_text(render.modulefile(scorep, machine))
 
     print(f"  Building {bdir.name} ({'with' if scorep else 'without'} Scorep wrappers)")
-    subprocess.run(["bash", "-c", BUILD_SCRIPT, "build", str(bdir)], check=True)
+    subprocess.run(["bash", "-c", BUILD_SCRIPT, "build", str(bdir), m.lmod_init, m.module,
+                    " ".join(f"{w}={c}" for w, c in m.wrapper_compilers)],
+                   check=True)
     if not mpas_bin(bdir).exists():
         raise SetupError(f"Build finished but {mpas_bin(bdir)} does not exist.")
     (bdir / STAMP).write_text(sha + "\n")

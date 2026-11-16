@@ -1,0 +1,69 @@
+{% set wrap = "scorep-" if profile else "" %}
+help([[
+This module loads libraries for MPAS-Model on Gaea C6
+]])
+
+whatis([===[Loads libraries for MPAS-Model on Gaea C6 ]===])
+-- spack-stack 2.0.0, oneAPI 2025.2.1 (compilers come from the system oneAPI under /opt/intel/oneapi).
+prepend_path("MODULEPATH", "/ncrc/proj/epic/spack-stack/c6/spack-stack-2.0.0/envs/ue-oneapi-2025.2.1/modules/Core")
+
+load("stack-intel-oneapi-compilers/2025.2.1")
+load("stack-cray-mpich/8.1.32")
+
+load("cmake/3.31.8")
+load("parallel-netcdf/1.12.3")
+load("parallelio/2.6.2")
+{% if profile %}
+
+prepend_path("MODULEPATH", "{{ scalasca.modulepath }}")
+load("{{ scalasca.module }}")
+{% endif %}
+
+-- spack-stack names the <package>_ROOT variables in upper case in 2.x and lower case in 1.x;
+-- accept either, since Lmod's setenv fails on a nil value.
+local function root(...)
+  for _, name in ipairs({...}) do
+    local value = os.getenv(name)
+    if value then return value end
+  end
+end
+
+if mode() == "load" then
+  local pnetcdf = root("PARALLEL_NETCDF_ROOT", "parallel_netcdf_ROOT")
+  if not pnetcdf then
+    LmodError("mpas/gaeac6.intel: cannot find the parallel-netcdf install root (PARALLEL_NETCDF_ROOT)")
+  end
+  setenv("PNETCDF", pnetcdf)
+  local netcdf_c = root("NETCDF_C_ROOT", "netcdf_c_ROOT")
+  local netcdf_fortran = root("NETCDF_FORTRAN_ROOT", "netcdf_fortran_ROOT")
+  if netcdf_c then
+    setenv("NetCDF_C_ROOT", netcdf_c)
+    setenv("NETCDF_C_ROOT", netcdf_c)
+  end
+  if netcdf_fortran then
+    setenv("NetCDF_FORTRAN_ROOT", netcdf_fortran)
+    setenv("NETCDF_FORTRAN_ROOT", netcdf_fortran)
+  end
+end
+if mode() == "unload" then
+  unsetenv("PNETCDF")
+  unsetenv("NetCDF_C_ROOT")
+  unsetenv("NetCDF_FORTRAN_ROOT")
+  unsetenv("NETCDF_C_ROOT")
+  unsetenv("NETCDF_FORTRAN_ROOT")
+end
+
+-- Use the oneAPI LLVM compilers (icx, icpx, ifx) only. The MPI wrappers pick their compiler
+-- from MPICH_CC/CXX/FC (the Cray MPICH counterpart of Intel MPI's I_MPI_CC/CXX/FC), and the
+-- build refuses to start if a wrapper does not call the compiler named here
+-- (wrapper_compilers in config/machines.yaml).
+setenv("CMAKE_C_COMPILER", "{{ wrap }}mpicc")
+setenv("CMAKE_CXX_COMPILER", "{{ wrap }}mpic++")
+setenv("CMAKE_Fortran_COMPILER", "{{ wrap }}mpifort")
+
+setenv("CC", "{{ wrap }}mpicc")
+setenv("CXX", "{{ wrap }}mpic++")
+setenv("FC", "{{ wrap }}mpifort")
+setenv("MPICH_CC", "{{ wrap }}icx")
+setenv("MPICH_CXX", "{{ wrap }}icpx")
+setenv("MPICH_FC", "{{ wrap }}ifx")

@@ -1,0 +1,60 @@
+# Machines a study can select with `machine: <key>` (default: ursa).
+#
+# module      MPAS modulefile name, loaded as `mpas/<module>`. MPAS's build.sh derives this
+#             from the host name (ush/detect_machine.sh), so it must match what MPAS
+#             detects on that machine's login nodes. The driver renders templates/<module>.lua.j2.
+# lmod_init   shell file that defines the `module` function when a bare shell lacks it
+# mpi         `intel` (Intel MPI) or `cray` (Cray MPICH); picks the MPI tuning in the job card
+# account     default Slurm account; omit when there is none, and the study must set `account`
+# qos         default Slurm QOS
+# sbatch      extra `#SBATCH` lines (without the prefix), e.g. a federated-cluster selector
+# wrapper_compilers
+#             MPI wrapper -> the compiler it must call. The build checks this (with the
+#             wrapper's -show/--version) after loading the modulefile and stops if it is wrong.
+# srun_args   extra arguments for the `srun` that launches MPAS
+# compute_fs  path prefix of the only file system the compute nodes mount; the driver
+#             refuses to stage runs, builds, or data that resolve outside it
+# scalasca    mapping {modulepath, module} for the Scalasca install; omit when there is none,
+#             and `profile: scalasca` is then refused on that machine
+#
+# Run the driver on a login node of the machine it targets: the build runs there.
+
+ursa:
+  module: ursa.intel
+  lmod_init: /apps/lmod/lmod/init/bash
+  mpi: intel
+  account: fv3-cpu
+  qos: batch
+  scalasca: {}   # the Ursa modulefile carries its own Scalasca paths
+  # oneAPI LLVM compilers only; the modulefile pins them through I_MPI_CC/CXX/FC.
+  wrapper_compilers:
+    mpiicx: icx
+    mpiicpx: icpx
+    mpiifx: ifx
+
+# NOAA RDHPCS Gaea C6. Log in to a C6 login node (gaea61-gaea66) to build.
+# Per the RDHPCS docs: C6 nodes are 2 x 96-core AMD EPYC with two hardware threads per core,
+# the `batch` partition is 1-512 nodes, QOS `normal` is the default, and compute nodes
+# mount only /gpfs/f6 (not /ncrc/home or /gpfs/f5).
+gaeac6:
+  module: gaeac6.intel
+  lmod_init: /etc/profile
+  mpi: cray
+  qos: normal
+  sbatch:
+    - --clusters=c6
+    - --partition=batch
+  # One rank per physical core; without this Slurm may place ranks on sibling hardware threads.
+  srun_args:
+    - --hint=nomultithread
+    - --cpu-bind=cores
+  compute_fs: /gpfs/f6
+  # oneAPI LLVM compilers only; the modulefile pins them through MPICH_CC/CXX/FC.
+  wrapper_compilers:
+    mpicc: icx
+    mpic++: icpx
+    mpifort: ifx
+  # No Scalasca/Score-P install is known for C6 yet. Once there is one, add:
+  #   scalasca:
+  #     modulepath: /path/to/modulefiles
+  #     module: scalasca/2.6.1

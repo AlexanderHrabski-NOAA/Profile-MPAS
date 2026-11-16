@@ -3,6 +3,7 @@
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import REPO
+from .config import DEFAULT_MACHINE, load_machines
 
 _env = Environment(
     loader=FileSystemLoader(str(REPO / "templates")),
@@ -13,16 +14,21 @@ _env = Environment(
 )
 
 
-def modulefile(profile):
-    return _env.get_template("ursa.intel.lua.j2").render(profile=profile)
+def modulefile(profile, machine=DEFAULT_MACHINE):
+    m = load_machines()[machine]
+    return _env.get_template(f"{m.module}.lua.j2").render(
+        profile=profile, scalasca=m.scalasca)
 
 
 def job(exp, mpas_bin):
+    m = load_machines()[exp.machine]
     return _env.get_template("job.fcst.j2").render(
         name=exp.name, tag=exp.tag, profile=exp.scorep, account=exp.account,
         qos=exp.qos, nodes=exp.nodes, tasks_per_node=exp.tasks_per_node,
         ntasks=exp.ntasks, cpus_per_task=exp.cpus_per_task,
-        walltime=exp.walltime, mpas_bin=mpas_bin)
+        walltime=exp.walltime, mpas_bin=mpas_bin, machine=m.key,
+        module=m.module, mpi=m.mpi, sbatch=m.sbatch,
+        srun_args=" ".join(m.srun_args))
 
 
 def namelist(exp, res):

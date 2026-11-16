@@ -77,6 +77,23 @@ elif [[ $MACHINE_ID = gaea-c5 ]] ; then
     fi
     source /lustre/f2/dev/role.epic/contrib/Lmod_init_C5.sh
 
+elif [[ $MACHINE_ID = gaeac6 ]] ; then
+    # We are on GAEA C6
+    if ( ! eval module help > /dev/null 2>&1 ) ; then
+        # RDHPCS: initialize modules from $MODULESHOME in job scripts, and never run the
+        # job under a login shell (`bash -l`). If MODULESHOME did not come through, fall
+        # back to /etc/profile, which sets up what the module command needs on Gaea.
+        # Neither is written for `set -u`, so relax that while sourcing.
+        set +u
+        if [[ -f ${MODULESHOME:-/nonexistent}/init/bash ]] ; then
+            source "$MODULESHOME/init/bash"
+        else
+            source /etc/profile
+        fi
+        set -u
+    fi
+    module purge
+
 elif [[ $MACHINE_ID = expanse ]]; then
     # We are on SDSC Expanse
     if ( ! eval module help > /dev/null 2>&1 ) ; then

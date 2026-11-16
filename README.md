@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository sets up, builds, and submits MPAS-Atmosphere experiments on Ursa, either with Scalasca/Score-P profiling or as a plain `native` build that relies on MPAS's own timers. You describe a *study* in a single YAML file: which MPAS to use, which resolution, and how many nodes and ranks. One command then builds MPAS, generates any missing grid partitions, writes a run directory for every experiment in the study, and submits them. The main use case is a strong-scaling study, where the same case runs at 1, 2, 4, ... nodes, but nothing stops you from comparing MPAS versions or profiling modes in the same study. `plot-timing.py` then turns the logs of a finished run, or a whole study, into summary tables and figures (see [Looking at Timing](#looking-at-timing)).
+This repository sets up, builds, and submits MPAS-Atmosphere experiments on Ursa or Gaea C6 (see [Machines](#machines)), either with Scalasca/Score-P profiling or as a plain `native` build that relies on MPAS's own timers. You describe a *study* in a single YAML file: which MPAS to use, which resolution, and how many nodes and ranks. One command then builds MPAS, generates any missing grid partitions, writes a run directory for every experiment in the study, and submits them. The main use case is a strong-scaling study, where the same case runs at 1, 2, 4, ... nodes, but nothing stops you from comparing MPAS versions or profiling modes in the same study. `plot-timing.py` then turns the logs of a finished run, or a whole study, into summary tables and figures (see [Looking at Timing](#looking-at-timing)).
 
 Each experiment directory records exactly what produced it (the MPAS commit, this repository's commit, the rendered job card, the `gpmetis` command), so a result can be reproduced later.
 
@@ -116,6 +116,7 @@ An entry can have both. The zipped pairs are then crossed with the `sweep`, so a
 
 | Key | Default | Meaning |
 |---|---|---|
+| `machine` | `ursa` | A key from `config/machines.yaml`: `ursa` or `gaeac6`. Selects the modules, Slurm directives, and MPI settings. See [Machines](#machines). |
 | `resolution` | (required) | A key from `config/resolutions.yaml`. |
 | `nodes` | (required) | Number of nodes. |
 | `tasks_per_node` | | MPI ranks per node. Total ranks = `nodes * tasks_per_node`. |
@@ -125,7 +126,7 @@ An entry can have both. The zipped pairs are then crossed with the `sweep`, so a
 | `mpas.ref` | submodule pin | Branch, tag, or commit hash of MPAS to build. |
 | `mpas.repo` | the `MPAS-Model` submodule | Path or URL of a different MPAS repository. |
 | `walltime` | `00:40:00` | Slurm time limit. |
-| `account`, `qos` | `fv3-cpu`, `batch` | Slurm account and QOS. |
+| `account`, `qos` | from the machine (`fv3-cpu`, `batch` on Ursa; none, `normal` on Gaea C6) | Slurm account and QOS. Gaea C6 has no default account, so a study there must set `account`. |
 | `start_time`, `run_duration` | `2026-1-26_00:00:00`, `7_00:00:00` | Written to `config_start_time` and `config_run_duration`. |
 | `output` | `true` | `false` turns off all model output: restart, history, and diagnostics get `output_interval="none"`. Input streams are untouched. |
 | `pio.num_iotasks` | `0` | `config_pio_num_iotasks`: how many ranks do file I/O. `0` means every rank does. |
@@ -134,11 +135,28 @@ An entry can have both. The zipped pairs are then crossed with the `sweep`, so a
 | `pio.io_type` | MPAS default (`pnetcdf`) | One of `pnetcdf`, `pnetcdf,cdf5`, `netcdf`, `netcdf4`. Written as the `io_type` attribute on the restart, history, and diagnostics streams only; PIO must have been built with support for it. |
 | `name` | generated | Experiment directory name. |
 
-Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` (for `scalasca`) or `native`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Non-default I/O settings add a suffix (`_noout`, `_io2pn` for `iotasks_per_node`, `_io8s48` for `num_iotasks`/`stride`, then the `io_type`), so sweeping them gives distinct names. Names must be unique within a study.
+Unknown keys are an error, so a typo fails immediately instead of being silently ignored. The generated name looks like `60km_MPAS-v8.4.2-1.19_prof_n4x96`: resolution, MPAS ref, `prof` (for `scalasca`) or `native`, then nodes and ranks per node (or `n4t384` for nodes and total tasks). Non-default I/O settings add a suffix (`_noout`, `_io2pn` for `iotasks_per_node`, `_io8s48` for `num_iotasks`/`stride`, then the `io_type`), so sweeping them gives distinct names. A machine other than Ursa adds its key as the last suffix (`_gaeac6`). Names must be unique within a study.
 
 `pio` and `mpas` are nested, so sweeps reach into them with dotted keys, for example `sweep: {nodes: [1, 2, 4], pio.iotasks_per_node: [1, 2], output: [true, false]}`. `studies/io-scaling-60km.yaml` is a worked example. The MPAS documentation suggests one or two I/O ranks per node as a starting point.
 
 Note that `profile` is a property of the experiment, not of MPAS. It changes how MPAS is built (the compiler wrappers in the modulefile) and how it is launched, but not which source is used. MPAS's own timers are compiled into every build, so every run, `scalasca` or `native`, writes its timing to `log.atmosphere.0000.out`. Scalasca runs just carry the instrumentation overhead, so use `native` when you want clean timings, such as for a scaling study.
+
+## Machines
+
+`config/machines.yaml` describes each machine a study can target with `machine:`: the MPAS modulefile name, how to get a `module` command in a bare shell, which MPI it uses, default Slurm account and QOS, extra `#SBATCH` lines and `srun` arguments, which file system the compute nodes mount, and where Scalasca lives. Ursa is the default, so existing studies are unchanged.
+
+**Gaea C6** (`machine: gaeac6`). These follow the [RDHPCS Gaea documentation](https://docs.rdhpcs.noaa.gov/systems/gaea_user_guide.html):
+
+- **Where to run.** Run the driver on a C6 login node (`gaea61` to `gaea66`). The build happens there, and MPAS's `build.sh` picks `mpas/gaeac6.intel` from the host name.
+- **Put everything on F6.** C6 compute nodes mount only `/gpfs/f6`, so not `/ncrc/home` and not F5. Clone this repository under `/gpfs/f6/<project>/scratch/<user>/` and keep the `ic/`, `fix/`, and `partition/` data there. The driver checks this (after following symlinks) and refuses to build or stage otherwise, naming the offending paths.
+- **Modules.** The modulefile is `templates/gaeac6.intel.lua.j2`, which follows MPAS's own `modulefiles/mpas/gaeac6.intel.lua` (spack-stack 2.0.0 with oneAPI 2025.2.1, the same compiler version as Ursa, and Cray MPICH 8.1.32; the compilers live in the system oneAPI under `/opt/intel/oneapi`). Unlike upstream's it does not load MKL, as on Ursa. Per the RDHPCS docs, the job card initializes modules from `$MODULESHOME` rather than using a login shell.
+- **Compilers.** `ifx`, `icx`, and `icpx` only. The modulefile sets `MPICH_FC`, `MPICH_CC`, and `MPICH_CXX` (Cray MPICH's counterpart of Intel MPI's `I_MPI_*` on Ursa) so `mpifort`, `mpicc`, and `mpic++` call them. Before compiling, the driver checks each wrapper with `-show` and `--version` and stops with an error if one calls anything else (`wrapper_compilers` in `config/machines.yaml`). If that check trips on a real C6 login node, `mpifort -show` shows what the wrapper really does.
+- **Slurm.** Jobs are submitted with `--clusters=c6 --partition=batch` (1 to 512 nodes, 16 h maximum) and QOS `normal`, the default. Use `qos: debug` for short jobs (1 h maximum). There is no default account, so set `account` in the study.
+- **Ranks per node.** C6 nodes have 192 cores (2 x 96-core EPYC), each with two hardware threads. Use `tasks_per_node: 192` for fully packed nodes; the driver does not check this. `srun` gets `--hint=nomultithread --cpu-bind=cores`, so ranks land on distinct physical cores rather than on sibling hardware threads. The job card sets no Intel MPI variables (`I_MPI_*`), since C6 uses Cray MPICH.
+- **Profiling.** `profile: scalasca` is refused on C6 because no Scalasca/Score-P install is configured (the RDHPCS documentation does not describe one). Use `profile: native`, which is the better choice for scaling timings anyway. If you have a Scalasca built against Cray MPICH, add its `modulepath` and `module` under `scalasca:` for `gaeac6` in `config/machines.yaml`, and `profile: scalasca` then builds with the `scorep-` wrappers.
+- `studies/strong-scaling-10km-gaeac6.yaml` is a starting point.
+
+To add another machine, add an entry to `config/machines.yaml`, a `templates/<module>.lua.j2` modulefile template, and a branch for it in `utils/module-setup.sh`.
 
 ## Running a Study
 
@@ -150,8 +168,8 @@ Always start with a dry run. It validates the YAML, resolves every MPAS ref to a
 
 ```
 Experiments:
-  name                               res   nodes  ranks  tpn  mpas          profile
-  60km_MPAS-v8.4.2-1.19_prof_n1x96   60km  1      96     96   a064c194c1a0  prof
+  name                               machine  res   nodes  ranks  tpn  mpas          profile
+  60km_MPAS-v8.4.2-1.19_prof_n1x96   ursa     60km  1      96     96   a064c194c1a0  prof
   ...
 
 Builds: 1
@@ -171,7 +189,7 @@ The tool prints one row per experiment, how many builds it needs, and which part
 The steps, in order:
 
 1. **Validate.** Check the YAML, the resolutions, the data directories, and resolve each `mpas.ref` to a full commit hash. If a ref isn't in the source repository yet, the driver runs `git fetch` there and tries again.
-2. **Build.** MPAS is cloned from the source repository and checked out at the resolved commit. Its nested submodules (the physics packages, such as MMM-physics, TEMPO, and UGWP) are then initialized at the commits MPAS pins, which needs network access to GitHub, and the model is built with `build.sh`. There is one build per unique *(commit, profile)* pair, shared by every experiment that needs it, so a five-point scaling study builds once, and the same binary runs at every scale. A finished build is marked with a `.build-ok` file and reused on later runs.
+2. **Build.** MPAS is cloned from the source repository and checked out at the resolved commit. Its nested submodules (the physics packages, such as MMM-physics, TEMPO, and UGWP) are then initialized at the commits MPAS pins, which needs network access to GitHub, and the model is built with `build.sh`. There is one build per unique *(commit, profile, machine)* triple, shared by every experiment that needs it, so a five-point scaling study builds once, and the same binary runs at every scale. A finished build is marked with a `.build-ok` file and reused on later runs.
 3. **Partition.** For each rank count that doesn't have a `partition/<res>/<stem>.graph.info.part.<nranks>` file, the driver runs `gpmetis -minconn -contig -niter=200 <stem>.graph.info <nranks>`. A single-rank run needs no partition file and MPAS doesn't read one.
 4. **Stage.** Each experiment directory is written and then submitted with `sbatch`.
 
@@ -200,7 +218,7 @@ runs/strong-scaling-60km/
     streams.atmosphere
     stream_list.*               copied from config/mpas
     scorep.filt                 copied from config/scalasca (profiled runs only)
-    modulefiles/mpas/ursa.intel.lua
+    modulefiles/mpas/ursa.intel.lua   (gaeac6.intel.lua on Gaea C6)
     module-setup.sh
     global.60km.init.nc  ...    symlinks to ic/ and fix/
     global.60km.graph.info.part.384   symlink to the partition
@@ -214,7 +232,7 @@ The job runs the binary inside the study's own `builds/` directory, not a shared
 
 `provenance.yaml` records the resolved experiment settings, the MPAS commit and build location, the commit of this repository (and whether it had uncommitted changes), a hash of the modulefile, the `gpmetis` command if one was run, and the job ID. The clone in `builds/` keeps its `origin` pointing at the repository it was cloned from, so `git -C builds/<build> remote -v` and `git -C builds/<build> log -1` tell you where the source came from.
 
-One thing to know: MPAS's `build.sh` reads the modulefile from inside its own tree, so the driver writes the rendered `modulefiles/mpas/ursa.intel.lua` into the clone before building. The clone's `git status` will therefore show that one file as changed (or added). This is expected.
+One thing to know: MPAS's `build.sh` reads the modulefile from inside its own tree, so the driver writes the rendered modulefile (`modulefiles/mpas/ursa.intel.lua`, or `gaeac6.intel.lua` on Gaea C6) into the clone before building. The clone's `git status` will therefore show that one file as changed (or added). This is expected.
 
 ## Looking at Profiles
 
@@ -258,7 +276,7 @@ A few things worth knowing when you read the numbers:
 The files in `templates/` are [Jinja2](https://jinja.palletsprojects.com/) templates, and they are the single source of truth for what gets written to an experiment:
 
 - `job.fcst.j2`: the Slurm script. The `scalasca` and `native` versions are the same template; the Score-P environment and the `scalasca --analyze` launcher appear only in `scalasca` mode.
-- `ursa.intel.lua.j2`: the modulefile used for both the build and the run. The `scalasca` version differs only in the `scorep-` prefix on the compiler wrappers.
+- `ursa.intel.lua.j2`, `gaeac6.intel.lua.j2`: the modulefile for each machine, used for both the build and the run. The `scalasca` version differs only in the `scorep-` prefix on the compiler wrappers (and, on C6, in loading Scalasca).
 - `namelist.atmosphere.j2` and `streams.atmosphere.j2`: the MPAS namelist and streams. Only the values that depend on the resolution, the start time and duration, the partition prefix, and the `output` and `pio` settings are variables; everything else is as you would write it by hand.
 
 Missing variables are an error rather than an empty string, so if you add `{{ something }}` to a template and forget to pass it, the dry run will tell you.
@@ -273,4 +291,4 @@ python -m pytest tests
 
 The tests for `plot-timing.py` draw real figures and are skipped when `matplotlib` is not installed. They run on a trimmed copy of a real log (`tests/data/`) and on synthetic logs written by `tests/logsynth.py`, which follow the same fixed-width format.
 
-The unit tests cover the setup parsing and the templates. The end-to-end test runs a copy of the whole tool against a small fake MPAS repository, with stand-ins for `module`, `sbatch`, and `gpmetis`, so it needs no cluster. It checks that a sweep makes one build, the right partitions, and one submission per experiment, and that a failed build submits nothing. It does not replace running a real job on Ursa.
+The unit tests cover the setup parsing and the templates. The end-to-end test runs a copy of the whole tool against a small fake MPAS repository, with stand-ins for `module`, `sbatch`, and `gpmetis`, so it needs no cluster. It checks that a sweep makes one build, the right partitions, and one submission per experiment, and that a failed build submits nothing. It does not replace running a real job on Ursa or Gaea C6.

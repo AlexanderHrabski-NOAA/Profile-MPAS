@@ -13,18 +13,20 @@ from . import REPO, SetupError
 
 # Everything an experiment (or `defaults`) may set. Adding a key to the setup
 # YAML means adding it here and using it in a template.
+DEFAULT_MACHINE = "ursa"
+# `account` and `qos` are not here: their defaults come from the machine (config/machines.yaml).
 DEFAULTS = {
+    "machine": DEFAULT_MACHINE,
     "profile": "scalasca",
     "cpus_per_task": 1,
     "walltime": "00:40:00",
-    "account": "fv3-cpu",
-    "qos": "batch",
     "start_time": "2026-1-26_00:00:00",
     "run_duration": "7_00:00:00",
     "output": True,
 }
 EXPERIMENT_KEYS = set(DEFAULTS) | {
     "name", "resolution", "nodes", "tasks_per_node", "ntasks", "mpas", "pio",
+    "account", "qos",
 }
 # `scalasca` builds with the Score-P wrappers and runs under scalasca. `native` is a plain
 # build that relies on MPAS's own timers (which write to the log in every mode). The old
@@ -59,6 +61,7 @@ class Experiment:
     pio_stride: int = 1               # config_pio_stride
     pio_iotasks_per_node: Optional[int] = None  # set when num_iotasks/stride were derived
     pio_io_type: Optional[str] = None  # io_type on the output streams; None = MPAS default
+    machine: str = DEFAULT_MACHINE    # a key in config/machines.yaml
 
     @property
     def scorep(self):
@@ -199,7 +202,8 @@ def resolve_pio(pio, nodes, ntasks, tpn, where):
     return num, stride, None, io_type
 
 
-def build_experiment(spec, where):
+def build_experiment(spec, where, machines=None):
+    machines = machines or load_machines()
     unknown = set(spec) - EXPERIMENT_KEYS
     if unknown:
         raise SetupError(f"{where}: unknown key(s): {', '.join(sorted(unknown))}")
@@ -208,6 +212,15 @@ def build_experiment(spec, where):
         raise SetupError(f"{where}: 'mpas' may only contain: {', '.join(sorted(MPAS_KEYS))}")
 
     spec = {**DEFAULTS, **spec}
+    machine = machines.get(spec["machine"]) if isinstance(spec["machine"], str) else None
+    if machine is None:
+        raise SetupError(f"{where}: unknown machine {spec['machine']!r} "
+                         f"(known: {', '.join(machines)}).")
+    account = spec.get("account") or machine.account
+    if not account:
+        raise SetupError(f"{where}: 'account' is required on machine '{machine.key}' "
+                         "(it has no default).")
+    qos = spec.get("qos") or machine.qos
     if not isinstance(spec["output"], bool):
         raise SetupError(f"{where}: 'output' must be true or false.")
     profile = spec["profile"]
@@ -217,6 +230,10 @@ def build_experiment(spec, where):
         raise SetupError(f"{where}: 'profile' must be one of "
                          f"{', '.join(PROFILE_MODES)} (got {profile!r}).")
     spec["profile"] = profile
+    if profile == "scalasca" and machine.scalasca is None:
+        raise SetupError(f"{where}: 'profile: scalasca' is not set up on machine "
+                         f"'{machine.key}' (no Scalasca install in config/machines.yaml). "
+                         "Use 'profile: native', or add a 'scalasca' entry for the machine.")
     if not spec.get("resolution"):
         raise SetupError(f"{where}: 'resolution' is required.")
 
@@ -252,6 +269,8 @@ def build_experiment(spec, where):
             parts.append(f"io{pio_n}s{pio_stride}")
         if io_type:
             parts.append(slug(io_type))
+        if machine.key != DEFAULT_MACHINE:
+            parts.append(machine.key)
         name = "_".join(parts)
     if slug(name) != name:
         raise SetupError(f"{where}: name '{name}' has characters unsafe for a directory.")
@@ -259,11 +278,11 @@ def build_experiment(spec, where):
     return Experiment(
         name=name, resolution=str(spec["resolution"]), nodes=nodes, ntasks=ntasks,
         tasks_per_node=tpn, cpus_per_task=cpt, walltime=str(spec["walltime"]),
-        account=spec["account"], qos=spec["qos"], profile=spec["profile"],
+        account=account, qos=qos, profile=spec["profile"],
         start_time=spec["start_time"], run_duration=spec["run_duration"],
         mpas_ref=None if ref is None else str(ref), mpas_repo=mpas.get("repo"),
         output=spec["output"], pio_num_iotasks=pio_n, pio_stride=pio_stride,
-        pio_iotasks_per_node=pio_pn, pio_io_type=io_type,
+        pio_iotasks_per_node=pio_pn, pio_io_type=io_type, machine=machine.key,
     )
 
 
@@ -287,13 +306,14 @@ def load_study(path):
     if not isinstance(defaults, dict) or not isinstance(entries, list) or not entries:
         raise SetupError("Need a 'defaults' mapping and a non-empty 'experiments' list.")
 
+    machines = load_machines()
     experiments = []
     for i, entry in enumerate(entries, 1):
         if not isinstance(entry, dict):
             raise SetupError(f"experiments[{i}] must be a mapping.")
         for j, spec in enumerate(expand_entry(entry), 1):
             experiments.append(build_experiment(
-                deep_merge(defaults, spec), f"experiments[{i}] (#{j})"))
+                deep_merge(defaults, spec), f"experiments[{i}] (#{j})", machines))
 
     names = [e.name for e in experiments]
     dupes = sorted({n for n in names if names.count(n) > 1})
@@ -326,6 +346,45 @@ def load_resolutions(path=None):
     for key, v in raw.items():
         try:
             out[str(key)] = Resolution(str(key), v["stem"], v["mesh"], float(v["dt"]))
+        except (KeyError, TypeError, ValueError) as e:
+            raise SetupError(f"{path}: bad entry for '{key}': {e!r}")
+    return out
+
+
+@dataclass
+class Machine:
+    key: str
+    module: str                       # mpas/<module>, e.g. gaeac6.intel
+    lmod_init: str                    # file that defines `module` in a bare shell
+    mpi: str                          # one of MPI_FLAVORS
+    account: Optional[str]            # None = the study must set one
+    qos: str
+    sbatch: tuple                     # extra #SBATCH lines, without the prefix
+    srun_args: tuple                  # extra arguments for the launching srun
+    compute_fs: Optional[str]         # None = compute nodes see everything
+    wrapper_compilers: tuple          # ((mpi wrapper, compiler it must call), ...); () = unchecked
+    scalasca: Optional[dict]          # {modulepath, module}; None = no Scalasca here
+
+
+MPI_FLAVORS = ("intel", "cray")
+
+
+def load_machines(path=None):
+    path = Path(path) if path else REPO / "config" / "machines.yaml"
+    raw = yaml.safe_load(path.read_text()) or {}
+    out = {}
+    for key, v in raw.items():
+        try:
+            if v["mpi"] not in MPI_FLAVORS:
+                raise ValueError(f"mpi must be one of {', '.join(MPI_FLAVORS)}")
+            scalasca = v.get("scalasca")
+            if scalasca is not None and not isinstance(scalasca, dict):
+                raise ValueError("scalasca must be a mapping")
+            out[str(key)] = Machine(
+                str(key), v["module"], v["lmod_init"], v["mpi"], v.get("account"),
+                v["qos"], tuple(v.get("sbatch") or ()), tuple(v.get("srun_args") or ()),
+                v.get("compute_fs"), tuple((v.get("wrapper_compilers") or {}).items()),
+                scalasca)
         except (KeyError, TypeError, ValueError) as e:
             raise SetupError(f"{path}: bad entry for '{key}': {e!r}")
     return out

@@ -201,3 +201,52 @@ def test_missing_resolution(tmp_path):
 def test_resolutions_registry():
     r = config.load_resolutions()["60km"]
     assert r.partition_prefix == "global.60km.graph.info.part."
+
+
+def test_machine_defaults_and_names():
+    e = config.build_experiment({"resolution": "60km", "nodes": 1, "tasks_per_node": 96}, "t")
+    assert (e.machine, e.account, e.qos) == ("ursa", "fv3-cpu", "batch")
+    g = config.build_experiment({"resolution": "60km", "nodes": 2, "tasks_per_node": 192,
+                                 "machine": "gaeac6", "account": "acct", "profile": "native"}, "t")
+    assert (g.machine, g.account, g.qos) == ("gaeac6", "acct", "normal")
+    assert g.name == "60km_pinned_native_n2x192_gaeac6"
+
+
+def test_machine_overrides_qos():
+    g = config.build_experiment({"resolution": "60km", "nodes": 1, "tasks_per_node": 192,
+                                 "machine": "gaeac6", "account": "a", "qos": "debug",
+                                 "profile": "native"}, "t")
+    assert g.qos == "debug"
+
+
+@pytest.mark.parametrize("extra, msg", [
+    ({"machine": "gaeac6", "profile": "native"}, "'account' is required on machine 'gaeac6'"),
+    ({"machine": "gaeac6", "account": "a"}, "not set up on machine 'gaeac6'"),
+    ({"machine": "nowhere"}, "unknown machine 'nowhere'"),
+])
+def test_machine_errors(extra, msg):
+    with pytest.raises(SetupError, match=msg):
+        config.build_experiment(
+            {"resolution": "60km", "nodes": 1, "tasks_per_node": 96, **extra}, "t")
+
+
+def test_machine_file_system_check(tmp_path):
+    from mpas_profile import experiment
+    m = config.load_machines()["gaeac6"]
+    (tmp_path / "f6").mkdir()
+    (tmp_path / "other").mkdir()
+    m = type(m)(**{**vars(m), "compute_fs": str(tmp_path / "f6")})
+    (tmp_path / "f6" / "link").symlink_to(tmp_path / "other")
+    experiment.check_compute_fs(m, [tmp_path / "f6", tmp_path / "f6" / "new"])
+    with pytest.raises(SetupError, match="(?s)only mount .*f6.*link -> .*other"):
+        experiment.check_compute_fs(m, [tmp_path / "f6" / "link"])
+    # machines without a restriction accept anything
+    experiment.check_compute_fs(config.load_machines()["ursa"], [tmp_path / "other"])
+
+
+def test_gaeac6_requires_llvm_compilers():
+    m = config.load_machines()
+    assert dict(m["gaeac6"].wrapper_compilers) == {"mpicc": "icx", "mpic++": "icpx",
+                                                   "mpifort": "ifx"}
+    assert dict(m["ursa"].wrapper_compilers) == {"mpiicx": "icx", "mpiicpx": "icpx",
+                                                 "mpiifx": "ifx"}

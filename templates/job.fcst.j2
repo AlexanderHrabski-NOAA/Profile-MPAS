@@ -1,6 +1,9 @@
 #! /bin/sh
 #SBATCH --account={{ account }}
 #SBATCH --qos={{ qos }}
+{% for line in sbatch %}
+#SBATCH {{ line }}
+{% endfor %}
 #SBATCH --nodes={{ nodes }}
 {% if tasks_per_node %}
 #SBATCH --tasks-per-node={{ tasks_per_node }}
@@ -14,16 +17,18 @@
 #SBATCH -o out.fcst_{{ tag }}
 #SBATCH -e err.fcst_{{ tag }}
 
-MACHINE_ID=ursa
+MACHINE_ID={{ machine }}
 source ./module-setup.sh
 module purge
 module use $PWD/modulefiles
-module load mpas/ursa.intel
+module load mpas/{{ module }}
 module list
 
+{% if mpi == "intel" %}
 export I_MPI_COLL_INTRANODE=shmem
 export I_MPI_PIN=1
 
+{% endif %}
 export OMP_STACKSIZE=2G
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
@@ -38,4 +43,4 @@ unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 export SCOREP_TOTAL_MEMORY=4095M
 {% endif %}
 
-{% if profile %}scalasca --analyze {% endif %}srun -N {{ nodes }} {% if tasks_per_node %}--tasks-per-node={{ tasks_per_node }}{% else %}-n {{ ntasks }}{% endif %} --cpus-per-task={{ cpus_per_task }} {{ mpas_bin }}
+{% if profile %}scalasca --analyze {% endif %}srun -N {{ nodes }} {% if tasks_per_node %}--tasks-per-node={{ tasks_per_node }}{% else %}-n {{ ntasks }}{% endif %} --cpus-per-task={{ cpus_per_task }}{% if srun_args %} {{ srun_args }}{% endif %} {{ mpas_bin }}

@@ -62,3 +62,49 @@ def test_pio_namelist_and_io_type():
     assert "config_pio_num_iotasks = 8\n    config_pio_stride = 48\n" in render.namelist(e, res)
     st = render.streams(e, res)
     assert st.count('io_type="pnetcdf,cdf5"') == 3   # restart, output, diagnostics only
+
+
+def gaea(**kw):
+    return exp(machine="gaeac6", account="acct", profile="native", tasks_per_node=192, **kw)
+
+
+def test_gaeac6_job_card():
+    job = render.job(gaea(), "/b/mpas_atmosphere")
+    assert "#SBATCH --account=acct\n#SBATCH --qos=normal\n" in job
+    assert "#SBATCH --clusters=c6\n#SBATCH --partition=batch\n" in job
+    assert "MACHINE_ID=gaeac6" in job and "module load mpas/gaeac6.intel" in job
+    assert "I_MPI" not in job and "scalasca" not in job
+    assert ("\nsrun -N 4 --tasks-per-node=192 --cpus-per-task=1 "
+            "--hint=nomultithread --cpu-bind=cores /b/mpas_atmosphere\n") in job
+
+
+def test_ursa_job_card_has_no_extra_directives():
+    job = render.job(exp(), "/b/x")
+    assert "--clusters" not in job and "MACHINE_ID=ursa" in job
+    assert "module load mpas/ursa.intel" in job and "I_MPI_PIN=1" in job
+
+
+def test_gaeac6_modulefile():
+    mod = render.modulefile(False, "gaeac6")
+    assert 'load("stack-cray-mpich/8.1.32")' in mod
+    assert "spack-stack-2.0.0/envs/ue-oneapi-2025.2.1/modules/Core" in mod
+    for m in ("stack-intel-oneapi-compilers/2025.2.1", "cmake/3.31.8",
+              "parallel-netcdf/1.12.3", "parallelio/2.6.2"):
+        assert f'load("{m}")' in mod
+    assert "mkl" not in mod and "2024" not in mod
+    assert 'setenv("CMAKE_Fortran_COMPILER", "mpifort")' in mod and "scorep" not in mod
+    # oneAPI LLVM compilers only, selected through the Cray MPICH wrapper variables
+    for var, comp in [("MPICH_CC", "icx"), ("MPICH_CXX", "icpx"), ("MPICH_FC", "ifx")]:
+        assert f'setenv("{var}", "{comp}")' in mod
+    assert '"ifort"' not in mod and '"icc"' not in mod and '"icpc"' not in mod
+
+
+def test_gaeac6_modulefile_with_scalasca(monkeypatch):
+    machines = config.load_machines()
+    m = machines["gaeac6"]
+    machines["gaeac6"] = type(m)(**{**vars(m), "scalasca": {
+        "modulepath": "/opt/mods", "module": "scalasca/2.6.1"}})
+    monkeypatch.setattr(render, "load_machines", lambda: machines)
+    mod = render.modulefile(True, "gaeac6")
+    assert 'prepend_path("MODULEPATH", "/opt/mods")' in mod and 'load("scalasca/2.6.1")' in mod
+    assert 'setenv("CMAKE_Fortran_COMPILER", "scorep-mpifort")' in mod
