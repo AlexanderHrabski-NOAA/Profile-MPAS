@@ -28,6 +28,11 @@ module list
 export I_MPI_COLL_INTRANODE=shmem
 export I_MPI_PIN=1
 
+{% elif mpi == "cray" %}
+# Very large runs can exhaust the CXI NIC's hardware matching resources and die with
+# "LE resources not recovered during flow control"; hybrid falls back to software matching.
+export FI_CXI_RX_MATCH_MODE=hybrid
+
 {% endif %}
 export OMP_STACKSIZE=2G
 export OMP_PROC_BIND=close

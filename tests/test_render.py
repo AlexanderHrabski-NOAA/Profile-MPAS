@@ -74,6 +74,7 @@ def test_gaeac6_job_card():
     assert "#SBATCH --clusters=c6\n#SBATCH --partition=batch\n" in job
     assert "MACHINE_ID=gaeac6" in job and "module load mpas/gaeac6.intel" in job
     assert "I_MPI" not in job and "scalasca" not in job
+    assert "\nexport FI_CXI_RX_MATCH_MODE=hybrid\n" in job
     assert ("\nsrun -N 4 --tasks-per-node=192 --cpus-per-task=1 "
             "--hint=nomultithread --cpu-bind=cores /b/mpas_atmosphere\n") in job
 
@@ -82,6 +83,7 @@ def test_ursa_job_card_has_no_extra_directives():
     job = render.job(exp(), "/b/x")
     assert "--clusters" not in job and "MACHINE_ID=ursa" in job
     assert "module load mpas/ursa.intel" in job and "I_MPI_PIN=1" in job
+    assert "FI_CXI" not in job
 
 
 def test_gaeac6_modulefile():
